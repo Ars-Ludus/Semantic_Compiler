@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Semcom Dashboard</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: ui-monospace, monospace; font-size: 13px; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+header { padding: 12px 20px; border-bottom: 1px solid #21262d; display: flex; align-items: center; gap: 16px; }
+header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
+nav { display: flex; gap: 4px; }
+nav button {
+  background: none; border: 1px solid transparent; padding: 4px 12px;
+  color: #8b949e; cursor: pointer; border-radius: 4px; font-family: inherit; font-size: 13px;
+}
+nav button:hover { color: #e6edf3; border-color: #30363d; }
+nav button.active { color: #e6edf3; border-color: #58a6ff; background: #161b22; }
+main { padding: 20px; }
+.tab { display: none; }
+.tab.active { display: block; }
+
+/* table */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #21262d; color: #8b949e; font-weight: 500; white-space: nowrap; }
+td { padding: 6px 10px; border-bottom: 1px solid #161b22; vertical-align: top; }
+tr:hover td { background: #161b22; }
+.truncate { max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.truncate.expanded { white-space: pre-wrap; word-break: break-word; max-width: none; }
+
+/* badges */
+.badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.badge-user  { background: #1f3a5f; color: #79c0ff; }
+.badge-model { background: #2d1b69; color: #d2a8ff; }
+
+/* stats cards */
+.cards { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.card { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px 16px; min-width: 140px; }
+.card-label { color: #8b949e; font-size: 11px; margin-bottom: 4px; }
+.card-value { font-size: 20px; font-weight: 600; color: #e6edf3; }
+.card-unit { font-size: 11px; color: #8b949e; }
+
+/* query */
+.query-form { display: flex; flex-direction: column; gap: 10px; max-width: 700px; margin-bottom: 24px; }
+textarea { background: #161b22; border: 1px solid #30363d; color: #e6edf3; padding: 10px; border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical; min-height: 80px; }
+textarea:focus { outline: none; border-color: #58a6ff; }
+.query-row { display: flex; gap: 10px; align-items: center; }
+.query-row label { color: #8b949e; white-space: nowrap; }
+input[type=number] { width: 60px; background: #161b22; border: 1px solid #30363d; color: #e6edf3; padding: 6px 8px; border-radius: 4px; font-family: inherit; font-size: 13px; }
+button.primary {
+  background: #238636; border: 1px solid #2ea043; color: #fff;
+  padding: 6px 16px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 13px;
+}
+button.primary:hover { background: #2ea043; }
+button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* query results */
+.result-stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat { color: #8b949e; }
+.stat span { color: #e6edf3; }
+.hits { display: flex; flex-direction: column; gap: 8px; }
+.hit { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px 14px; }
+.hit-meta { color: #8b949e; font-size: 11px; margin-bottom: 4px; }
+.hit-score { color: #58a6ff; font-weight: 600; }
+.hit-raw { line-height: 1.5; word-break: break-word; }
+.empty { color: #8b949e; padding: 20px 0; }
+
+/* pagination */
+.pagination { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.pagination button {
+  background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+  padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 13px;
+}
+.pagination button:hover { background: #30363d; }
+.pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+.pagination .page-info { color: #8b949e; }
+
+/* section heading */
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.section-head h2 { font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.refresh-btn {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px;
+}
+.refresh-btn:hover { color: #e6edf3; border-color: #8b949e; }
+
+.us { color: #8b949e; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>semcom</h1>
+  <nav>
+    <button class="active" onclick="showTab('memories')">Memories</button>
+    <button onclick="showTab('benchmarks')">Benchmarks</button>
+    <button onclick="showTab('query')">Query</button>
+  </nav>
+</header>
+<main>
+
+<!-- MEMORIES -->
+<div id="tab-memories" class="tab active">
+  <div class="section-head">
+    <h2>Memories</h2>
+    <button class="refresh-btn" onclick="loadMemories()">Refresh</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Turn</th>
+        <th>Source</th>
+        <th>Message</th>
+        <th>SemKeys</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody id="memories-tbody">
+      <tr><td colspan="6" class="empty">Loading…</td></tr>
+    </tbody>
+  </table>
+  <div class="pagination">
+    <button id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
+    <span class="page-info" id="page-info"></span>
+    <button id="next-btn" onclick="nextPage()">Next →</button>
+  </div>
+</div>
+
+<!-- BENCHMARKS -->
+<div id="tab-benchmarks" class="tab">
+  <div class="section-head">
+    <h2>Benchmarks</h2>
+    <button class="refresh-btn" onclick="loadBenchmarks()">Refresh</button>
+  </div>
+  <div class="cards" id="bench-cards">
+    <div class="card"><div class="card-label">Embed avg</div><div class="card-value" id="b-embed-avg">—</div><div class="card-unit">µs</div></div>
+    <div class="card"><div class="card-label">Embed min</div><div class="card-value" id="b-embed-min">—</div><div class="card-unit">µs</div></div>
+    <div class="card"><div class="card-label">Embed max</div><div class="card-value" id="b-embed-max">—</div><div class="card-unit">µs</div></div>
+    <div class="card"><div class="card-label">Retrieve avg</div><div class="card-value" id="b-ret-avg">—</div><div class="card-unit">µs</div></div>
+    <div class="card"><div class="card-label">Retrieve min</div><div class="card-value" id="b-ret-min">—</div><div class="card-unit">µs</div></div>
+    <div class="card"><div class="card-label">Retrieve max</div><div class="card-value" id="b-ret-max">—</div><div class="card-unit">µs</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Op</th><th>Embed µs</th><th>Retrieve µs</th><th>L0 tokens</th><th>Vocab hits</th><th>Time</th></tr>
+    </thead>
+    <tbody id="bench-tbody">
+      <tr><td colspan="7" class="empty">No benchmarks yet — run a query first.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- QUERY -->
+<div id="tab-query" class="tab">
+  <div class="section-head"><h2>Query</h2></div>
+  <div class="query-form">
+    <textarea id="query-text" placeholder="Enter text to embed and retrieve…"></textarea>
+    <div class="query-row">
+      <label>Top-K</label>
+      <input type="number" id="top-k" value="5" min="1" max="50">
+      <button class="primary" id="query-btn" onclick="runQuery()">Run Query</button>
+    </div>
+  </div>
+  <div id="query-output"></div>
+</div>
+
+</main>
+<script>
+let memoriesOffset = 0;
+const PAGE_SIZE = 50;
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (name === 'memories') loadMemories();
+  if (name === 'benchmarks') loadBenchmarks();
+}
+
+// ── Memories ──────────────────────────────────────────────────────────────────
+function loadMemories() {
+  const url = `/api/memories?limit=${PAGE_SIZE}&offset=${memoriesOffset}`;
+  fetch(url).then(r => r.json()).then(data => {
+    const tbody = document.getElementById('memories-tbody');
+    if (!data.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty">No memories found.</td></tr>`;
+      document.getElementById('next-btn').disabled = true;
+      return;
+    }
+    tbody.innerHTML = data.map(m => `
+      <tr>
+        <td>${m.id}</td>
+        <td>${m.turn_id}</td>
+        <td><span class="badge badge-${m.source}">${m.source}</span></td>
+        <td><div class="truncate" onclick="this.classList.toggle('expanded')" title="Click to expand">${esc(m.raw)}</div></td>
+        <td>${m.semkey_count}</td>
+        <td>${fmtTime(m.created_at)}</td>
+      </tr>`).join('');
+    document.getElementById('prev-btn').disabled = memoriesOffset === 0;
+    document.getElementById('next-btn').disabled = data.length < PAGE_SIZE;
+    document.getElementById('page-info').textContent =
+      `${memoriesOffset + 1}–${memoriesOffset + data.length}`;
+  }).catch(e => {
+    document.getElementById('memories-tbody').innerHTML =
+      `<tr><td colspan="6" class="empty">Error: ${esc(String(e))}</td></tr>`;
+  });
+}
+
+function prevPage() {
+  if (memoriesOffset >= PAGE_SIZE) { memoriesOffset -= PAGE_SIZE; loadMemories(); }
+}
+function nextPage() { memoriesOffset += PAGE_SIZE; loadMemories(); }
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+function loadBenchmarks() {
+  fetch('/api/benchmarks?n=100').then(r => r.json()).then(data => {
+    const tbody = document.getElementById('bench-tbody');
+    if (!data.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty">No benchmarks yet — run a query first.</td></tr>`;
+      return;
+    }
+
+    // compute aggregate stats
+    const embedVals = data.map(e => e.embed_us);
+    const retVals   = data.map(e => e.retrieve_us);
+    const avg = a => Math.round(a.reduce((s,x) => s+x, 0) / a.length);
+    const min = a => Math.min(...a);
+    const max = a => Math.max(...a);
+
+    document.getElementById('b-embed-avg').textContent = avg(embedVals);
+    document.getElementById('b-embed-min').textContent = min(embedVals);
+    document.getElementById('b-embed-max').textContent = max(embedVals);
+    document.getElementById('b-ret-avg').textContent = avg(retVals);
+    document.getElementById('b-ret-min').textContent = min(retVals);
+    document.getElementById('b-ret-max').textContent = max(retVals);
+
+    tbody.innerHTML = data.map((e, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${esc(e.op)}</td>
+        <td>${e.embed_us} <span class="us">µs</span></td>
+        <td>${e.retrieve_us} <span class="us">µs</span></td>
+        <td>${e.l0_count}</td>
+        <td>${e.tokens}</td>
+        <td>${fmtTime(e.ts)}</td>
+      </tr>`).join('');
+  });
+}
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+function runQuery() {
+  const text = document.getElementById('query-text').value.trim();
+  if (!text) return;
+  const topK = parseInt(document.getElementById('top-k').value) || 5;
+  const btn = document.getElementById('query-btn');
+  const out = document.getElementById('query-output');
+
+  btn.disabled = true;
+  out.innerHTML = `<div class="empty">Running…</div>`;
+
+  fetch('/api/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, top_k: topK }),
+  }).then(r => {
+    if (!r.ok) return r.text().then(t => { throw new Error(t); });
+    return r.json();
+  }).then(d => {
+    const statsHtml = `
+      <div class="result-stats">
+        <div class="stat">Embed <span>${d.embed_us} µs</span></div>
+        <div class="stat">Retrieve <span>${d.retrieve_us} µs</span></div>
+        <div class="stat">L0 tokens <span>${d.l0_count}</span></div>
+        <div class="stat">Vocab hits <span>${d.tokens}</span></div>
+        <div class="stat">Matches <span>${d.results.length}</span></div>
+      </div>`;
+
+    const hitsHtml = d.results.length
+      ? `<div class="hits">${d.results.map(h => `
+          <div class="hit">
+            <div class="hit-meta">memory #${h.memory_id} &nbsp;·&nbsp; score <span class="hit-score">${h.score}</span></div>
+            <div class="hit-raw">${esc(h.raw)}</div>
+          </div>`).join('')}</div>`
+      : `<div class="empty">No matching memories found.</div>`;
+
+    out.innerHTML = statsHtml + hitsHtml;
+
+    // auto-refresh benchmarks tab if it's active
+    if (document.getElementById('tab-benchmarks').classList.contains('active')) {
+      loadBenchmarks();
+    }
+  }).catch(e => {
+    out.innerHTML = `<div class="empty">Error: ${esc(String(e))}</div>`;
+  }).finally(() => { btn.disabled = false; });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+// Load initial data
+loadMemories();
+</script>
+</body>
+</html>
