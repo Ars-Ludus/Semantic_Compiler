@@ -2,6 +2,7 @@ package semanticstore
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -124,5 +125,134 @@ func TestReopenPreservesData(t *testing.T) {
 	}
 	if m.Raw != "persist" || len(m.SemKey) != 1 || m.SemKey[0] != 99 {
 		t.Errorf("data mismatch after reopen: %+v", m)
+	}
+}
+
+func TestMigration(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "old.db")
+
+	// Create a DB with the OLD schema (no personal_tokens)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open old db: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE memories (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			turn_id     INTEGER NOT NULL,
+			summary_id  INTEGER,
+			source      TEXT    NOT NULL CHECK(source IN ('user', 'model')),
+			raw_message TEXT    NOT NULL,
+			created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("failed to create old schema: %v", err)
+	}
+	db.Close()
+
+	// Now open it with our Store - this should trigger migration
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed on old db: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	// Try to insert a record with PersonalIDs - if migration failed, this will fail
+	// because the column is missing.
+	id, err := s.Insert(ctx, &Memory{
+		TurnID:      1,
+		Source:      SourceUser,
+		Raw:         "migration test",
+		PersonalIDs: []uint32{456},
+	})
+	if err != nil {
+		t.Fatalf("Insert failed after migration: %v", err)
+	}
+
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get failed after migration: %v", err)
+	}
+
+	if !slices.Equal(m.PersonalIDs, []uint32{456}) {
+		t.Errorf("PersonalIDs mismatch: got %v, want %v", m.PersonalIDs, []uint32{456})
+	}
+}
+
+func TestEdgeCases(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		ids  []uint32
+	}{
+		{"nil", nil},
+		{"empty", []uint32{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := s.Insert(ctx, &Memory{
+				TurnID:      1,
+				Source:      SourceUser,
+				Raw:         "edge case test",
+				PersonalIDs: tc.ids,
+			})
+			if err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+
+			m, err := s.Get(ctx, id)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+
+			if len(m.PersonalIDs) != 0 {
+				t.Errorf("expected 0 PersonalIDs, got %v", m.PersonalIDs)
+			}
+		})
+	}
+}
+
+func TestJSONHandling(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "json.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	id, err := s.Insert(ctx, &Memory{
+		TurnID:      1,
+		Source:      SourceUser,
+		Raw:         "json test",
+		PersonalIDs: nil,
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	// Now check the DB directly
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+
+	var personalTokens string
+	err = db.QueryRow("SELECT personal_tokens FROM memories WHERE id = ?", id).Scan(&personalTokens)
+	if err != nil {
+		t.Fatalf("QueryRow: %v", err)
+	}
+
+	if personalTokens != "" {
+		t.Errorf("expected empty string in DB for nil PersonalIDs, got %q", personalTokens)
 	}
 }

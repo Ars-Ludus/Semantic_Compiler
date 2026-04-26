@@ -27,7 +27,48 @@ func openSQLite(path string) (*sqliteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
 	return &sqliteStore{db: db}, nil
+}
+
+func migrate(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(memories)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasPersonalTokens := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var dtype string
+		var notnull int
+		var dfltValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &dtype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == "personal_tokens" {
+			hasPersonalTokens = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if !hasPersonalTokens {
+		if _, err := db.Exec("ALTER TABLE memories ADD COLUMN personal_tokens TEXT"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *sqliteStore) Insert(ctx context.Context, m *Memory) (int64, error) {
@@ -37,14 +78,18 @@ func (s *sqliteStore) Insert(ctx context.Context, m *Memory) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	personalIDsJSON, err := json.Marshal(m.PersonalIDs)
-	if err != nil {
-		return 0, fmt.Errorf("marshal personal IDs: %w", err)
+	var personalIDsStr string
+	if m.PersonalIDs != nil {
+		b, err := json.Marshal(m.PersonalIDs)
+		if err != nil {
+			return 0, fmt.Errorf("marshal personal IDs: %w", err)
+		}
+		personalIDsStr = string(b)
 	}
 
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO memories (turn_id, summary_id, source, raw_message, personal_tokens) VALUES (?, ?, ?, ?, ?)`,
-		m.TurnID, m.SummaryID, string(m.Source), m.Raw, string(personalIDsJSON),
+		m.TurnID, m.SummaryID, string(m.Source), m.Raw, personalIDsStr,
 	)
 	if err != nil {
 		return 0, err
