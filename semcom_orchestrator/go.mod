@@ -9,6 +9,7 @@ replace (
 )
 
 require (
+	github.com/Ars-Ludus/providertron v0.0.0-20260423233045-9e50163b5c09
 	github.com/ars/semantic_store v0.0.0-00010101000000-000000000000
 	github.com/ars/semcom_retrieve v0.0.0-00010101000000-000000000000
 	semcom_embed v0.0.0-00010101000000-000000000000
@@ -31,7 +32,7 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.49.1 // indirect
+	modernc.org/sqlite v1.50.0 // indirect
 	semcom_personal v0.0.0-00010101000000-000000000000
 )
 

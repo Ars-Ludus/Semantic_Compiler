@@ -24,8 +24,12 @@ func tokenize(text string, words map[string]int32) (*roaring.Bitmap, []string) {
 
 // SplitWords lowercases text and splits on any non-letter, non-digit rune.
 func SplitWords(text string) []string {
-	lower := strings.ToLower(text)
-	return strings.FieldsFunc(lower, func(r rune) bool {
+	return SplitWordsPreserveCase(strings.ToLower(text))
+}
+
+// SplitWordsPreserveCase splits on any non-letter, non-digit rune but preserves original casing.
+func SplitWordsPreserveCase(text string) []string {
+	return strings.FieldsFunc(text, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 }

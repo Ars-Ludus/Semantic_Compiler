@@ -1,20 +1,45 @@
 package personal
 
 import (
-	"database/sql"
+	"context"
+	"encoding/json"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
-func TestSchema(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-	defer db.Close()
+type mockLLM struct {
+	response DiscoveryResponse
+}
 
-	if _, err := db.Exec(Schema); err != nil {
-		t.Fatalf("failed to execute schema: %v", err)
+func (m *mockLLM) GenerateJSON(ctx context.Context, prompt string, target interface{}) error {
+	b, _ := json.Marshal(m.response)
+	return json.Unmarshal(b, target)
+}
+
+func TestDiscover(t *testing.T) {
+	ctx := context.Background()
+	llm := &mockLLM{
+		response: DiscoveryResponse{
+			Topics: []string{"Alice", "Wonderland"},
+		},
 	}
+
+	t.Run("successful_discovery", func(t *testing.T) {
+		resp, err := Discover(ctx, llm, "Alice in Wonderland")
+		if err != nil {
+			t.Fatalf("Discover: %v", err)
+		}
+		if len(resp.Topics) != 2 {
+			t.Errorf("expected 2 topics, got %d", len(resp.Topics))
+		}
+	})
+
+	t.Run("empty_message", func(t *testing.T) {
+		resp, err := Discover(ctx, llm, "")
+		if err != nil {
+			t.Fatalf("Discover: %v", err)
+		}
+		if len(resp.Topics) != 0 {
+			t.Errorf("expected 0 topics, got %d", len(resp.Topics))
+		}
+	})
 }

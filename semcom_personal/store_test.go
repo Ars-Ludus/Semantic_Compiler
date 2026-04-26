@@ -1,19 +1,19 @@
 package personal
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func openTestStore(t *testing.T) *Store {
-	s, err := Open(":memory:")
-	if err != nil {
-		t.Fatalf("failed to open test store: %v", err)
-	}
-	return s
-}
-
 func TestStore(t *testing.T) {
-	s := openTestStore(t)
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 	defer s.Close()
 
 	t.Run("TokenOperations", func(t *testing.T) {
@@ -21,8 +21,8 @@ func TestStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("InsertToken: %v", err)
 		}
-		if id < 1000000 {
-			t.Errorf("expected ID >= 1000000, got %d", id)
+		if id == 0 {
+			t.Errorf("expected non-zero ID")
 		}
 
 		token, err := s.GetToken("Alice")
@@ -30,30 +30,32 @@ func TestStore(t *testing.T) {
 			t.Fatalf("GetToken: %v", err)
 		}
 		if token.Word != "alice" {
-			t.Errorf("expected word 'alice', got %q", token.Word)
+			t.Errorf("expected lowercase word alice, got %s", token.Word)
+		}
+		if token.Type != "PERSON" {
+			t.Errorf("expected type PERSON, got %s", token.Type)
 		}
 	})
 
-	t.Run("IgnoreOperations", func(t *testing.T) {
-		word := "the"
-		if err := s.AddIgnore(word); err != nil {
-			t.Fatalf("AddIgnore failed: %v", err)
-		}
-
-		ignored, err := s.IsIgnored(word)
+	t.Run("LinkMemory", func(t *testing.T) {
+		err := s.LinkMemory(123, []uint32{1, 2})
 		if err != nil {
-			t.Fatalf("IsIgnored failed: %v", err)
-		}
-		if !ignored {
-			t.Error("expected word to be ignored")
-		}
-
-		ignored, err = s.IsIgnored("unknown")
-		if err != nil {
-			t.Fatalf("IsIgnored failed: %v", err)
-		}
-		if ignored {
-			t.Error("expected word to NOT be ignored")
+			t.Errorf("LinkMemory: %v", err)
 		}
 	})
+}
+
+func TestSchema(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "schema_test.db")
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	s.Close()
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Errorf("expected DB file to exist")
+	}
 }

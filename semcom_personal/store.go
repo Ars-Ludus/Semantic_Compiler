@@ -2,6 +2,7 @@ package personal
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -9,6 +10,14 @@ import (
 
 type Store struct {
 	db *sql.DB
+}
+
+type Distillation struct {
+	ID          int64
+	Topic       string
+	Snippet     string
+	PersonalIDs []uint32
+	SemKeys     []uint32
 }
 
 func Open(path string) (*Store, error) {
@@ -26,6 +35,8 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error {
 	return s.db.Close()
 }
+
+// Token Methods
 
 func (s *Store) InsertToken(word, t string) (uint32, error) {
 	word = strings.ToLower(word)
@@ -50,19 +61,6 @@ func (s *Store) GetToken(word string) (*Token, error) {
 	return &t, nil
 }
 
-func (s *Store) AddIgnore(word string) error {
-	word = strings.ToLower(word)
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO personal_ignore (word) VALUES (?)`, word)
-	return err
-}
-
-func (s *Store) IsIgnored(word string) (bool, error) {
-	word = strings.ToLower(word)
-	var exists bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM personal_ignore WHERE word = ?)`, word).Scan(&exists)
-	return exists, err
-}
-
 func (s *Store) GetAllTokens() (map[string]uint32, error) {
 	rows, err := s.db.Query(`SELECT word, id FROM personal_tokens`)
 	if err != nil {
@@ -82,20 +80,73 @@ func (s *Store) GetAllTokens() (map[string]uint32, error) {
 	return tokens, nil
 }
 
-func (s *Store) GetAllIgnore() (map[string]struct{}, error) {
-	rows, err := s.db.Query(`SELECT word FROM personal_ignore`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+// Link Methods
 
-	ignore := make(map[string]struct{})
-	for rows.Next() {
-		var word string
-		if err := rows.Scan(&word); err != nil {
-			return nil, err
-		}
-		ignore[strings.ToLower(word)] = struct{}{}
+func (s *Store) LinkMemory(memoryID int64, personalIDs []uint32) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
 	}
-	return ignore, nil
+	defer tx.Rollback()
+
+	for _, pid := range personalIDs {
+		_, err := tx.Exec(`INSERT OR IGNORE INTO personal_semkeys (personal_id, memory_id) VALUES (?, ?)`, pid, memoryID)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Distillation Methods
+
+func (s *Store) InsertDistillation(d *Distillation) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var pIDsJSON []byte
+	if d.PersonalIDs != nil {
+		pIDsJSON, _ = json.Marshal(d.PersonalIDs)
+	}
+
+	res, err := tx.Exec(`INSERT INTO distillations (topic, snippet, personal_tokens) VALUES (?, ?, ?)`,
+		d.Topic, d.Snippet, string(pIDsJSON))
+	if err != nil {
+		return 0, err
+	}
+
+	distillID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	for _, sk := range d.SemKeys {
+		_, err := tx.Exec(`INSERT INTO distillation_semkeys (distillation_id, semkey_value) VALUES (?, ?)`,
+			distillID, sk)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return distillID, tx.Commit()
+}
+
+// Metadata Methods
+
+func (s *Store) GetMetadata(key string) (string, error) {
+	var val string
+	err := s.db.QueryRow(`SELECT value FROM metadata WHERE key = ?`, key).Scan(&val)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return val, err
+}
+
+func (s *Store) SetMetadata(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		key, value)
+	return err
 }

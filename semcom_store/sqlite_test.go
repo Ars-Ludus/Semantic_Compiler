@@ -28,7 +28,7 @@ func TestInsertGet(t *testing.T) {
 		Source:      SourceUser,
 		Raw:         "hello world",
 		SemKey:      []uint32{3, 7, 42},
-		PersonalIDs: []uint32{101, 102},
+		PersonalIDs: []uint32{1000001, 1000002},
 	})
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -53,8 +53,8 @@ func TestInsertGet(t *testing.T) {
 		t.Errorf("SemKey: got %v, want %v", got, want)
 	}
 
-	if !slices.Equal(m.PersonalIDs, []uint32{101, 102}) {
-		t.Errorf("PersonalIDs: got %v, want %v", m.PersonalIDs, []uint32{101, 102})
+	if !slices.Equal(m.PersonalIDs, []uint32{1000001, 1000002}) {
+		t.Errorf("PersonalIDs: got %v, want %v", m.PersonalIDs, []uint32{1000001, 1000002})
 	}
 }
 
@@ -167,7 +167,7 @@ func TestMigration(t *testing.T) {
 		TurnID:      1,
 		Source:      SourceUser,
 		Raw:         "migration test",
-		PersonalIDs: []uint32{456},
+		PersonalIDs: []uint32{1000456},
 	})
 	if err != nil {
 		t.Fatalf("Insert failed after migration: %v", err)
@@ -178,8 +178,8 @@ func TestMigration(t *testing.T) {
 		t.Fatalf("Get failed after migration: %v", err)
 	}
 
-	if !slices.Equal(m.PersonalIDs, []uint32{456}) {
-		t.Errorf("PersonalIDs mismatch: got %v, want %v", m.PersonalIDs, []uint32{456})
+	if !slices.Equal(m.PersonalIDs, []uint32{1000456}) {
+		t.Errorf("PersonalIDs mismatch: got %v, want %v", m.PersonalIDs, []uint32{1000456})
 	}
 }
 
@@ -246,13 +246,13 @@ func TestJSONHandling(t *testing.T) {
 	}
 	defer db.Close()
 
-	var personalTokens string
+	var personalTokens sql.NullString
 	err = db.QueryRow("SELECT personal_tokens FROM memories WHERE id = ?", id).Scan(&personalTokens)
 	if err != nil {
 		t.Fatalf("QueryRow: %v", err)
 	}
 
-	if personalTokens != "" {
-		t.Errorf("expected empty string in DB for nil PersonalIDs, got %q", personalTokens)
+	if personalTokens.Valid {
+		t.Errorf("expected NULL in DB for nil PersonalIDs, got %q", personalTokens.String)
 	}
 }

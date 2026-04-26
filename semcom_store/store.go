@@ -21,6 +21,7 @@ type Memory struct {
 	CreatedAt   time.Time
 	SemKey      []uint32
 	PersonalIDs []uint32
+	Discovered  bool
 }
 
 // SemKeyRow is a (semkey value, memory ID) pair used by the retrieval layer
@@ -44,6 +45,21 @@ type Store interface {
 
 	// MaxTurnID returns the highest turn_id stored, or 0 if no rows exist.
 	MaxTurnID(ctx context.Context) (int64, error)
+
+	// UnprocessedMemories returns all memories that haven't been processed by discovery.
+	UnprocessedMemories(ctx context.Context) ([]*Memory, error)
+
+	// MarkMemoryDiscovered sets the discovered flag for a memory.
+	MarkMemoryDiscovered(ctx context.Context, memoryID int64) error
+
+	// GetChunk returns memories between startID and endID (inclusive).
+	GetChunk(ctx context.Context, startID, endID int64) ([]*Memory, error)
+
+	// MemoriesContainingWord returns memories where raw_message contains the word (case-insensitive LIKE).
+	MemoriesContainingWord(ctx context.Context, word string) ([]*Memory, error)
+
+	// UpdateMemoryPersonalTokens updates the personal_tokens column and associated semkeys index.
+	UpdateMemoryPersonalTokens(ctx context.Context, memoryID int64, personalIDs []uint32) error
 
 	Close() error
 }

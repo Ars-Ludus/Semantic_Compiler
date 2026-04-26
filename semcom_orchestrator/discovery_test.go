@@ -4,67 +4,25 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"semcom_personal"
 	semanticstore "github.com/ars/semantic_store"
 	semindex "semcom_embed"
 )
 
-func TestDiscoveryWorker(t *testing.T) {
-	tempDir := t.TempDir()
-	personalDBPath := filepath.Join(tempDir, "personal.db")
+type MockLLM struct{}
 
-	pStore, err := personal.Open(personalDBPath)
-	if err != nil {
-		t.Fatalf("personal.Open: %v", err)
-	}
-	defer pStore.Close()
-
-	pMatcher, err := personal.NewMatcher(pStore)
-	if err != nil {
-		t.Fatalf("personal.NewMatcher: %v", err)
-	}
-
-	unmappedCh := make(chan []string, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start worker with MockLLM
-	go startDiscoveryWorker(ctx, pStore, pMatcher, unmappedCh, &MockLLM{})
-
-	// 1. Send "Alice" to unmapped channel
-	unmappedCh <- []string{"Alice"}
-
-	// 2. Wait for it to be processed
-	// DiscoveryWorker has a 2s ticker, so we wait a bit more
-	time.Sleep(3 * time.Second)
-
-	// 3. Check if Alice was learned
-	hits, unmapped := pMatcher.Match([]string{"Alice"})
-	if len(hits) != 1 {
-		t.Errorf("expected Alice to be matched, got 0 hits. Unmapped: %v", unmapped)
-	}
-	if len(unmapped) != 0 {
-		t.Errorf("expected Alice to be removed from unmapped, got %v", unmapped)
-	}
-
-	// 4. Send "bob" (should be ignored by MockLLM)
-	unmappedCh <- []string{"bob"}
-	time.Sleep(3 * time.Second)
-
-	hits, unmapped = pMatcher.Match([]string{"bob"})
-	if len(hits) != 0 {
-		t.Errorf("expected bob to NOT be matched, got %d hits", len(hits))
-	}
-	if len(unmapped) != 0 {
-		t.Errorf("expected bob to be ignored (so not unmapped), got %v", unmapped)
-	}
+func (m *MockLLM) GenerateJSON(ctx context.Context, prompt string, target interface{}) error {
+	// A simple mock that extracts "Alice", "Providertron", and "project" as topics
+	resp := target.(*personal.DiscoveryResponse)
+	resp.Topics = []string{"Alice", "Providertron", "project"}
+	return nil
 }
 
-func TestOrchestratorDiscovery(t *testing.T) {
+func TestDiscoveryPass(t *testing.T) {
 	tempDir := t.TempDir()
 	personalDBPath := filepath.Join(tempDir, "personal.db")
+	mainDBPath := filepath.Join(tempDir, "main.db")
 
 	pStore, err := personal.Open(personalDBPath)
 	if err != nil {
@@ -77,60 +35,73 @@ func TestOrchestratorDiscovery(t *testing.T) {
 		t.Fatalf("personal.NewMatcher: %v", err)
 	}
 
-	unmappedCh := make(chan []string, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	store, err := semanticstore.Open(mainDBPath)
+	if err != nil {
+		t.Fatalf("semanticstore.Open: %v", err)
+	}
+	defer store.Close()
 
 	orch := &Orchestrator{
 		embed: &mockEmbedder{
-			l0IDs:    []int32{1, 2},
-			oovWords: []string{"Alice"},
+			l0IDs: []int32{1, 2},
+			oovMap: map[string]bool{
+				"Alice":        true,
+				"Providertron": true,
+				// "project" is NOT here, so Query("project") will return OOVWords=nil
+			},
 		},
-		personal:   pMatcher,
-		thresholds: semindex.Thresholds{L0: 0.1},
-		store:      openTestStore(t),
-		unmappedCh: unmappedCh,
+		personal:      pMatcher,
+		personalStore: pStore,
+		thresholds:    semindex.Thresholds{L0: 0.1},
+		store:         store,
 	}
 
-	// Start worker
-	go startDiscoveryWorker(ctx, pStore, pMatcher, unmappedCh, &MockLLM{})
+	ctx := context.Background()
 
-	// 1. Ingest message with "Alice"
+	// 1. Ingest a message
 	_, err = orch.Ingest(ctx, IngestRequest{
-		Text:   "Alice is here",
+		Text:   "Working on Providertron with Alice",
 		Source: semanticstore.SourceUser,
 	})
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 
-	// 2. Wait for discovery
-	time.Sleep(3 * time.Second)
-
-	// 3. Check if Alice is now matched
-	hits, unmapped := pMatcher.Match([]string{"Alice"})
-	if len(hits) != 1 {
-		t.Fatalf("expected Alice to be matched, got 0 hits. Unmapped: %v", unmapped)
+	// 2. Verify unprocessed state
+	unprocessed, _ := store.UnprocessedMemories(ctx)
+	if len(unprocessed) != 1 {
+		t.Fatalf("expected 1 unprocessed memory, got %d", len(unprocessed))
 	}
 
-	// 4. Ingest again, should now include Alice in L0Count
-	result, err := orch.Ingest(ctx, IngestRequest{
-		Text:   "Alice is here again",
-		Source: semanticstore.SourceUser,
-	})
-	if err != nil {
-		t.Fatalf("Ingest: %v", err)
+	// 3. Run Discovery Pass
+	if err := RunDiscoveryPass(ctx, orch, &MockLLM{}); err != nil {
+		t.Fatalf("RunDiscoveryPass: %v", err)
 	}
 
-	// 1 global OOV + 2 global L0 + 1 personal = 3? 
-	// Wait, mockEmbedder.Query returns l0IDs []int32{1, 2}.
-	// Alice is OOV, so it's NOT in stats.L0IDs.
-	// After discovery, pMatcher.Match("Alice") returns 1 hit.
-	// embedAndMatch combines them.
-	// In first Ingest: global L0 IDs: {1, 2}, personal: {}, unmapped: {"Alice"} -> semKeys: {1, 2} (len 2)
-	// In second Ingest: global L0 IDs: {1, 2}, personal: {ID_ALICE}, unmapped: {} -> semKeys: {1, 2, ID_ALICE} (len 3)
-	
-	if result.L0Count != 3 {
-		t.Errorf("L0Count: got %d, want 3", result.L0Count)
+	// 4. Verify enriched state
+	unprocessed, _ = store.UnprocessedMemories(ctx)
+	if len(unprocessed) != 0 {
+		t.Errorf("expected 0 unprocessed memories, got %d", len(unprocessed))
+	}
+
+	// Check if Alice and Providertron were learned
+	// "project" should be skipped because Query("project") returns no OOV words
+	hits, _ := pMatcher.Match([]string{"Alice", "Providertron"})
+	if len(hits) != 2 {
+		t.Errorf("expected 2 personal tokens to be matched, got %d", len(hits))
+	}
+
+	hits, _ = pMatcher.Match([]string{"project"})
+	if len(hits) != 0 {
+		t.Errorf("expected 'project' to be skipped (already known to global)")
+	}
+
+	// Check main store record
+	m, _ := store.Get(ctx, 1)
+	if !m.Discovered {
+		t.Errorf("expected memory to be marked discovered")
+	}
+	if len(m.PersonalIDs) != 2 {
+		t.Errorf("expected 2 personal IDs in memory record, got %v", m.PersonalIDs)
 	}
 }

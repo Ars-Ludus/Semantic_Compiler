@@ -1,10 +1,11 @@
 go 1.26.2
 
 use (
-	./semcom_orchestrator
-	./semcom_store
-	./semcom_embed
-	./semcom_retrieve
+	../../../providertron
 	./dashboard
+	./semcom_embed
+	./semcom_orchestrator
 	./semcom_personal
+	./semcom_retrieve
+	./semcom_store
 )
