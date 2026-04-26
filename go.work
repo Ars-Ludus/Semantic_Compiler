@@ -6,4 +6,5 @@ use (
 	./semcom_embed
 	./semcom_retrieve
 	./dashboard
+	./semcom_personal
 )
