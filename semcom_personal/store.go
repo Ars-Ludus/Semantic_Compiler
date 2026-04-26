@@ -56,3 +56,40 @@ func (s *Store) IsIgnored(word string) (bool, error) {
 	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM personal_ignore WHERE word = ?)`, word).Scan(&exists)
 	return exists, err
 }
+
+func (s *Store) GetAllTokens() (map[string]uint32, error) {
+	rows, err := s.db.Query(`SELECT word, id FROM personal_tokens`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tokens := make(map[string]uint32)
+	for rows.Next() {
+		var word string
+		var id uint32
+		if err := rows.Scan(&word, &id); err != nil {
+			return nil, err
+		}
+		tokens[word] = id
+	}
+	return tokens, nil
+}
+
+func (s *Store) GetAllIgnore() (map[string]struct{}, error) {
+	rows, err := s.db.Query(`SELECT word FROM personal_ignore`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ignore := make(map[string]struct{})
+	for rows.Next() {
+		var word string
+		if err := rows.Scan(&word); err != nil {
+			return nil, err
+		}
+		ignore[word] = struct{}{}
+	}
+	return ignore, nil
+}
