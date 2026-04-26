@@ -1,20 +1,28 @@
 package personal
 
 import (
-	"os"
-	"path/filepath"
+	"database/sql"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
-func TestStore(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
-
-	s, err := Open(dbPath)
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("sql.Open: %v", err)
 	}
-	defer s.Close()
+	if _, err := db.Exec(Schema); err != nil {
+		db.Close()
+		t.Fatalf("apply schema: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return NewStore(db)
+}
+
+func TestStore(t *testing.T) {
+	s := openTestStore(t)
 
 	t.Run("TokenOperations", func(t *testing.T) {
 		id, err := s.InsertToken("Alice", "PERSON")
@@ -38,24 +46,8 @@ func TestStore(t *testing.T) {
 	})
 
 	t.Run("LinkMemory", func(t *testing.T) {
-		err := s.LinkMemory(123, []uint32{1, 2})
-		if err != nil {
+		if err := s.LinkMemory(123, []uint32{1, 2}); err != nil {
 			t.Errorf("LinkMemory: %v", err)
 		}
 	})
-}
-
-func TestSchema(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "schema_test.db")
-
-	s, err := Open(dbPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	s.Close()
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Errorf("expected DB file to exist")
-	}
 }

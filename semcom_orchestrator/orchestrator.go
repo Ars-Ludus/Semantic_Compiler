@@ -7,6 +7,7 @@ import (
 
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
+	distill "semcom_distill"
 	semindex "semcom_embed"
 	personal "semcom_personal"
 )
@@ -27,6 +28,7 @@ type Orchestrator struct {
 	embed         Embedder
 	personal      PersonalMatcher
 	personalStore *personal.Store
+	distillStore  *distill.Store
 	thresholds    semindex.Thresholds
 	store         semanticstore.Store
 	retriever     *semcomretrieve.Retriever

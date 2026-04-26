@@ -2,44 +2,48 @@ package main
 
 import (
 	"context"
-	"path/filepath"
+	"database/sql"
 	"testing"
 
 	"semcom_personal"
 	semanticstore "github.com/ars/semantic_store"
 	semindex "semcom_embed"
+
+	_ "modernc.org/sqlite"
 )
 
 type MockLLM struct{}
 
 func (m *MockLLM) GenerateJSON(ctx context.Context, prompt string, target interface{}) error {
-	// A simple mock that extracts "Alice", "Providertron", and "project" as topics
 	resp := target.(*personal.DiscoveryResponse)
 	resp.Topics = []string{"Alice", "Providertron", "project"}
 	return nil
 }
 
-func TestDiscoveryPass(t *testing.T) {
-	tempDir := t.TempDir()
-	personalDBPath := filepath.Join(tempDir, "personal.db")
-	mainDBPath := filepath.Join(tempDir, "main.db")
-
-	pStore, err := personal.Open(personalDBPath)
+func openTestPersonalDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
-		t.Fatalf("personal.Open: %v", err)
+		t.Fatalf("sql.Open: %v", err)
 	}
-	defer pStore.Close()
+	if _, err := db.Exec(personal.Schema); err != nil {
+		db.Close()
+		t.Fatalf("apply schema: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestDiscoveryPass(t *testing.T) {
+	pDB := openTestPersonalDB(t)
+	pStore := personal.NewStore(pDB)
 
 	pMatcher, err := personal.NewMatcher(pStore)
 	if err != nil {
 		t.Fatalf("personal.NewMatcher: %v", err)
 	}
 
-	store, err := semanticstore.Open(mainDBPath)
-	if err != nil {
-		t.Fatalf("semanticstore.Open: %v", err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
 	orch := &Orchestrator{
 		embed: &mockEmbedder{
@@ -47,7 +51,7 @@ func TestDiscoveryPass(t *testing.T) {
 			oovMap: map[string]bool{
 				"Alice":        true,
 				"Providertron": true,
-				// "project" is NOT here, so Query("project") will return OOVWords=nil
+				// "project" absent — Query returns no OOVWords, so it's skipped
 			},
 		},
 		personal:      pMatcher,
@@ -58,7 +62,6 @@ func TestDiscoveryPass(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Ingest a message
 	_, err = orch.Ingest(ctx, IngestRequest{
 		Text:   "Working on Providertron with Alice",
 		Source: semanticstore.SourceUser,
@@ -67,41 +70,35 @@ func TestDiscoveryPass(t *testing.T) {
 		t.Fatalf("Ingest: %v", err)
 	}
 
-	// 2. Verify unprocessed state
 	unprocessed, _ := store.UnprocessedMemories(ctx)
 	if len(unprocessed) != 1 {
 		t.Fatalf("expected 1 unprocessed memory, got %d", len(unprocessed))
 	}
 
-	// 3. Run Discovery Pass
 	if err := RunDiscoveryPass(ctx, orch, &MockLLM{}); err != nil {
 		t.Fatalf("RunDiscoveryPass: %v", err)
 	}
 
-	// 4. Verify enriched state
 	unprocessed, _ = store.UnprocessedMemories(ctx)
 	if len(unprocessed) != 0 {
-		t.Errorf("expected 0 unprocessed memories, got %d", len(unprocessed))
+		t.Errorf("expected 0 unprocessed memories after pass, got %d", len(unprocessed))
 	}
 
-	// Check if Alice and Providertron were learned
-	// "project" should be skipped because Query("project") returns no OOV words
 	hits, _ := pMatcher.Match([]string{"Alice", "Providertron"})
 	if len(hits) != 2 {
-		t.Errorf("expected 2 personal tokens to be matched, got %d", len(hits))
+		t.Errorf("expected 2 personal tokens matched, got %d", len(hits))
 	}
 
 	hits, _ = pMatcher.Match([]string{"project"})
 	if len(hits) != 0 {
-		t.Errorf("expected 'project' to be skipped (already known to global)")
+		t.Errorf("expected 'project' skipped (known to global index)")
 	}
 
-	// Check main store record
 	m, _ := store.Get(ctx, 1)
 	if !m.Discovered {
-		t.Errorf("expected memory to be marked discovered")
+		t.Errorf("expected memory marked discovered")
 	}
 	if len(m.PersonalIDs) != 2 {
-		t.Errorf("expected 2 personal IDs in memory record, got %v", m.PersonalIDs)
+		t.Errorf("expected 2 personal IDs in memory, got %v", m.PersonalIDs)
 	}
 }

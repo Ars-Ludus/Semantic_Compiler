@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -10,12 +11,13 @@ import (
 
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
+	distill "semcom_distill"
 	semindex "semcom_embed"
+	llmclient "semcom_llm"
 	personal "semcom_personal"
 	seminternal "semcom_internal"
 
-	"github.com/Ars-Ludus/providertron/provider"
-	"github.com/Ars-Ludus/providertron/providers/gemini"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -46,11 +48,15 @@ func main() {
 	}
 	defer store.Close()
 
-	pStore, err := personal.Open(personalDBPath)
+	// One shared SQLite connection for all personalization modules.
+	personalDB, err := openSharedDB(personalDBPath, personal.Schema, distill.Schema)
 	if err != nil {
-		log.Fatalf("open personal store: %v", err)
+		log.Fatalf("open personal db: %v", err)
 	}
-	defer pStore.Close()
+	defer personalDB.Close()
+
+	pStore := personal.NewStore(personalDB)
+	dStore := distill.NewStore(personalDB)
 
 	pMatcher, err := personal.NewMatcher(pStore)
 	if err != nil {
@@ -72,6 +78,7 @@ func main() {
 		embed:         idx,
 		personal:      pMatcher,
 		personalStore: pStore,
+		distillStore:  dStore,
 		thresholds:    semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},
 		store:         store,
 		retriever:     retriever,
@@ -118,20 +125,29 @@ func main() {
 	}
 }
 
-func newLLMClient() *ProvidertronClient {
+func openSharedDB(path string, schemas ...string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	for _, schema := range schemas {
+		if _, err := db.Exec(schema); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	return db, nil
+}
+
+func newLLMClient() *llmclient.Client {
 	apiKey := seminternal.EnvOr("GOOGLE_API_KEY", seminternal.EnvOr("GEMINI_API_KEY", ""))
 	if apiKey == "" {
 		log.Fatal("GOOGLE_API_KEY or GEMINI_API_KEY required for LLM passes")
 	}
 	model := seminternal.EnvOr("GEMINI_MODEL", "gemini-2.5-flash-preview-04-17")
-	cfg := &gemini.Config{APIKey: apiKey, Model: model}
-	backend, err := gemini.New(cfg)
+	client, err := llmclient.New(apiKey, model)
 	if err != nil {
-		log.Fatalf("create gemini backend: %v", err)
+		log.Fatalf("create llm client: %v", err)
 	}
-	p, err := provider.New(cfg, backend)
-	if err != nil {
-		log.Fatalf("create provider: %v", err)
-	}
-	return NewProvidertronClient(p, model)
+	return client
 }

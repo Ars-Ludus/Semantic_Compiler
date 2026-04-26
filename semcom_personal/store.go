@@ -2,41 +2,19 @@ package personal
 
 import (
 	"database/sql"
-	"encoding/json"
 	"strings"
-
-	_ "modernc.org/sqlite"
 )
 
+// Store persists personal tokens and their memory associations.
+// It operates on a *sql.DB provided by the caller — no lifecycle ownership.
 type Store struct {
 	db *sql.DB
 }
 
-type Distillation struct {
-	ID          int64
-	Topic       string
-	Snippet     string
-	PersonalIDs []uint32
-	SemKeys     []uint32
+// NewStore wraps an existing database connection.
+func NewStore(db *sql.DB) *Store {
+	return &Store{db: db}
 }
-
-func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(Schema); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return &Store{db: db}, nil
-}
-
-func (s *Store) Close() error {
-	return s.db.Close()
-}
-
-// Token Methods
 
 func (s *Store) InsertToken(word, t string) (uint32, error) {
 	word = strings.ToLower(word)
@@ -80,8 +58,6 @@ func (s *Store) GetAllTokens() (map[string]uint32, error) {
 	return tokens, nil
 }
 
-// Link Methods
-
 func (s *Store) LinkMemory(memoryID int64, personalIDs []uint32) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -90,63 +66,12 @@ func (s *Store) LinkMemory(memoryID int64, personalIDs []uint32) error {
 	defer tx.Rollback()
 
 	for _, pid := range personalIDs {
-		_, err := tx.Exec(`INSERT OR IGNORE INTO personal_semkeys (personal_id, memory_id) VALUES (?, ?)`, pid, memoryID)
-		if err != nil {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO personal_semkeys (personal_id, memory_id) VALUES (?, ?)`,
+			pid, memoryID,
+		); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
-}
-
-// Distillation Methods
-
-func (s *Store) InsertDistillation(d *Distillation) (int64, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	var pIDsJSON []byte
-	if d.PersonalIDs != nil {
-		pIDsJSON, _ = json.Marshal(d.PersonalIDs)
-	}
-
-	res, err := tx.Exec(`INSERT INTO distillations (topic, snippet, personal_tokens) VALUES (?, ?, ?)`,
-		d.Topic, d.Snippet, string(pIDsJSON))
-	if err != nil {
-		return 0, err
-	}
-
-	distillID, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-
-	for _, sk := range d.SemKeys {
-		_, err := tx.Exec(`INSERT INTO distillation_semkeys (distillation_id, semkey_value) VALUES (?, ?)`,
-			distillID, sk)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	return distillID, tx.Commit()
-}
-
-// Metadata Methods
-
-func (s *Store) GetMetadata(key string) (string, error) {
-	var val string
-	err := s.db.QueryRow(`SELECT value FROM metadata WHERE key = ?`, key).Scan(&val)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return val, err
-}
-
-func (s *Store) SetMetadata(key, value string) error {
-	_, err := s.db.Exec(`INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-		key, value)
-	return err
 }

@@ -5,19 +5,26 @@ go 1.26.2
 replace (
 	github.com/ars/semantic_store => ../semcom_store
 	github.com/ars/semcom_retrieve => ../semcom_retrieve
+	semcom_distill => ../semcom_distill
 	semcom_embed => ../semcom_embed
 	semcom_internal => ../internal
+	semcom_llm => ../semcom_llm
+	semcom_personal => ../semcom_personal
 )
 
 require (
-	github.com/Ars-Ludus/providertron v0.0.0-20260423233045-9e50163b5c09
 	github.com/ars/semantic_store v0.0.0-00010101000000-000000000000
 	github.com/ars/semcom_retrieve v0.0.0-00010101000000-000000000000
+	semcom_distill v0.0.0-00010101000000-000000000000
 	semcom_embed v0.0.0-00010101000000-000000000000
 	semcom_internal v0.0.0-00010101000000-000000000000
+	semcom_llm v0.0.0-00010101000000-000000000000
+	semcom_personal v0.0.0-00010101000000-000000000000
+	modernc.org/sqlite v1.50.0
 )
 
 require (
+	github.com/Ars-Ludus/providertron v0.0.0-20260423233045-9e50163b5c09 // indirect
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -34,8 +41,4 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.0 // indirect
-	semcom_personal v0.0.0-00010101000000-000000000000
 )
-
-replace semcom_personal => ../semcom_personal
