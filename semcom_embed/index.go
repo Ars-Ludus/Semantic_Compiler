@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 
@@ -39,42 +40,44 @@ func Load(path string) (*Index, error) {
 	defer f.Close()
 
 	var si SerializedIndex
-	if err := gob.NewDecoder(f).Decode(&si); err != nil {
+	if err = gob.NewDecoder(f).Decode(&si); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	idx := &Index{
-		words:    si.Words,
-		l0:       deserializeBitmaps(si.L0Bitmaps),
-		l1:       deserializeBitmaps(si.L1Bitmaps),
-		l2:       deserializeBitmaps(si.L2Bitmaps),
-		l3:       deserializeBitmaps(si.L3Bitmaps),
-		l3toL2:   si.L3toL2,
-		l2toL1:   si.L2toL1,
-		l1toL0:   si.L1toL0,
-		l0Tokens: si.L0Tokens,
+	idx := &Index{words: si.Words, l3toL2: si.L3toL2, l2toL1: si.L2toL1, l1toL0: si.L1toL0, l0Tokens: si.L0Tokens}
+	if idx.l0, err = deserializeBitmaps(si.L0Bitmaps); err != nil {
+		return nil, err
+	}
+	if idx.l1, err = deserializeBitmaps(si.L1Bitmaps); err != nil {
+		return nil, err
+	}
+	if idx.l2, err = deserializeBitmaps(si.L2Bitmaps); err != nil {
+		return nil, err
+	}
+	if idx.l3, err = deserializeBitmaps(si.L3Bitmaps); err != nil {
+		return nil, err
 	}
 	return idx, nil
 }
 
-// QueryStats holds per-level counts from a query for inspection.
+// QueryStats holds results and per-level counts from a query.
 type QueryStats struct {
 	QueryTokens int
 	L3          int
 	L2          int
 	L1          int
 	L0IDs       []int32
-	Tokens      int
+	TokenIDs    []int32
 }
 
 // Query tokenizes text and runs the hierarchical threshold search.
 // At each level, only clusters whose match ratio exceeds the threshold pass.
 // The query narrows at each level to only the tokens that matched in the
 // parent cluster, pruning irrelevant branches early.
-func (idx *Index) Query(text string, th Thresholds) ([]int32, QueryStats) {
+func (idx *Index) Query(text string, th Thresholds) QueryStats {
 	q := tokenize(text, idx.words)
 	if q.IsEmpty() {
-		return nil, QueryStats{}
+		return QueryStats{}
 	}
 
 	// L3: take top 5 clusters by raw match count
@@ -89,7 +92,6 @@ func (idx *Index) Query(text string, th Thresholds) ([]int32, QueryStats) {
 	// L0
 	l0pass := drillDown(l1pass, idx.l1toL0, idx.l0, th.L0)
 
-	// Collect tokens from all passing L0 clusters
 	result := roaring.New()
 	for _, c := range l0pass {
 		for _, t := range idx.l0Tokens[c.id] {
@@ -97,10 +99,10 @@ func (idx *Index) Query(text string, th Thresholds) ([]int32, QueryStats) {
 		}
 	}
 
-	out := make([]int32, 0, result.GetCardinality())
+	tokenIDs := make([]int32, 0, result.GetCardinality())
 	it := result.Iterator()
 	for it.HasNext() {
-		out = append(out, int32(it.Next()))
+		tokenIDs = append(tokenIDs, int32(it.Next()))
 	}
 
 	l0IDs := make([]int32, len(l0pass))
@@ -108,15 +110,14 @@ func (idx *Index) Query(text string, th Thresholds) ([]int32, QueryStats) {
 		l0IDs[i] = c.id
 	}
 
-	stats := QueryStats{
+	return QueryStats{
 		QueryTokens: int(q.GetCardinality()),
 		L3:          len(l3pass),
 		L2:          len(l2pass),
 		L1:          len(l1pass),
 		L0IDs:       l0IDs,
-		Tokens:      len(out),
+		TokenIDs:    tokenIDs,
 	}
-	return out, stats
 }
 
 // candidate is a cluster that passed its level's threshold, carrying the
@@ -145,37 +146,6 @@ func topNByOverlap(q *roaring.Bitmap, bitmaps map[int32]*roaring.Bitmap, n int) 
 	out := make([]candidate, n)
 	for i := range out {
 		out[i] = candidate{scores[i].id, roaring.And(q, bitmaps[scores[i].id])}
-	}
-	return out
-}
-
-// filterByThreshold scores clusters against query q and returns all whose
-// match ratio exceeds threshold. If pool is nil, all clusters are scored.
-// The narrowed query (q ∩ cluster bitmap) is carried forward.
-func filterByThreshold(q *roaring.Bitmap, bitmaps map[int32]*roaring.Bitmap, pool []int32, threshold float64) []candidate {
-	qCard := float64(q.GetCardinality())
-	if qCard == 0 {
-		return nil
-	}
-
-	if pool == nil {
-		pool = make([]int32, 0, len(bitmaps))
-		for id := range bitmaps {
-			pool = append(pool, id)
-		}
-	}
-
-	var out []candidate
-	for _, id := range pool {
-		bm, ok := bitmaps[id]
-		if !ok {
-			continue
-		}
-		matched := q.AndCardinality(bm)
-		if matched > 0 && float64(matched)/qCard >= threshold {
-			narrowed := roaring.And(q, bm)
-			out = append(out, candidate{id, narrowed})
-		}
 	}
 	return out
 }
@@ -217,14 +187,15 @@ func drillDown(parents []candidate, members map[int32][]int32, childBitmaps map[
 	return out
 }
 
-func deserializeBitmaps(m map[int32][]byte) map[int32]*roaring.Bitmap {
+func deserializeBitmaps(m map[int32][]byte) (map[int32]*roaring.Bitmap, error) {
 	out := make(map[int32]*roaring.Bitmap, len(m))
 	for id, b := range m {
 		bm := roaring.New()
 		if _, err := bm.ReadFrom(bytes.NewReader(b)); err != nil {
-			panic(fmt.Sprintf("deserialize bitmap %d: %v", id, err))
+			slog.Error("deserialize bitmap", "id", id, "err", err)
+			return nil, fmt.Errorf("deserialize bitmap %d: %w", id, err)
 		}
 		out[id] = bm
 	}
-	return out
+	return out, nil
 }

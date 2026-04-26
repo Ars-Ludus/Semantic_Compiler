@@ -37,8 +37,8 @@ func (s *sqliteStore) Insert(ctx context.Context, m *Memory) (int64, error) {
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO memories (turn_id, summary_id, source, raw_message) VALUES (?, ?, ?, ?)`,
-		m.TurnID, m.SummaryID, string(m.Source), m.Raw,
+		`INSERT INTO memories (turn_id, source, raw_message) VALUES (?, ?, ?)`,
+		m.TurnID, string(m.Source), m.Raw,
 	)
 	if err != nil {
 		return 0, err
@@ -65,8 +65,8 @@ func (s *sqliteStore) Get(ctx context.Context, id int64) (*Memory, error) {
 	var createdAt string
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, turn_id, summary_id, source, raw_message, created_at FROM memories WHERE id = ?`, id,
-	).Scan(&m.ID, &m.TurnID, &m.SummaryID, &m.Source, &m.Raw, &createdAt)
+		`SELECT id, turn_id, source, raw_message, created_at FROM memories WHERE id = ?`, id,
+	).Scan(&m.ID, &m.TurnID, &m.Source, &m.Raw, &createdAt)
 	if err != nil {
 		return nil, err
 	}

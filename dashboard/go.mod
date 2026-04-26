@@ -6,6 +6,7 @@ replace (
 	github.com/ars/semantic_store => ../semcom_store
 	github.com/ars/semcom_retrieve => ../semcom_retrieve
 	semcom_embed => ../semcom_embed
+	semcom_internal => ../internal
 )
 
 require (
@@ -13,6 +14,7 @@ require (
 	github.com/ars/semcom_retrieve v0.0.0-00010101000000-000000000000
 	modernc.org/sqlite v1.49.1
 	semcom_embed v0.0.0-00010101000000-000000000000
+	semcom_internal v0.0.0-00010101000000-000000000000
 )
 
 require (

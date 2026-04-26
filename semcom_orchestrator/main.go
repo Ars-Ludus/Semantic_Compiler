@@ -4,26 +4,19 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	semindex "semcom_embed"
+	seminternal "semcom_internal"
 )
 
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
 func main() {
-	indexPath := envOr("INDEX_PATH", "index.bin")
-	dbPath := envOr("DB_PATH", "memory.db")
-	port := envOr("PORT", "8080")
+	indexPath := seminternal.EnvOr("INDEX_PATH", "index.bin")
+	dbPath := seminternal.EnvOr("DB_PATH", "memory.db")
+	port := seminternal.EnvOr("PORT", "8080")
 
 	idx, err := semindex.Load(indexPath)
 	if err != nil {

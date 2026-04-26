@@ -64,18 +64,18 @@ func runQuery(args []string) {
 
 	th := semindex.Thresholds{L2: *t2, L1: *t1, L0: *t0}
 	queryStart := time.Now()
-	tokens, stats := idx.Query(text, th)
+	stats := idx.Query(text, th)
 	queryTime := time.Since(queryStart)
-	if len(tokens) == 0 {
+	if len(stats.TokenIDs) == 0 {
 		fmt.Fprintln(os.Stderr, "no results")
 		os.Exit(0)
 	}
 
 	fmt.Fprintf(os.Stderr, "query tokens: %d | l3: %d | l2: %d | l1: %d | l0: %d | tokens: %d | load: %s | query: %s\n",
-		stats.QueryTokens, stats.L3, stats.L2, stats.L1, len(stats.L0IDs), stats.Tokens, loadTime.Round(time.Microsecond), queryTime.Round(time.Microsecond))
+		stats.QueryTokens, stats.L3, stats.L2, stats.L1, len(stats.L0IDs), len(stats.TokenIDs), loadTime.Round(time.Microsecond), queryTime.Round(time.Microsecond))
 
-	parts := make([]string, len(tokens))
-	for i, t := range tokens {
+	parts := make([]string, len(stats.TokenIDs))
+	for i, t := range stats.TokenIDs {
 		parts[i] = strconv.Itoa(int(t))
 	}
 	fmt.Println(strings.Join(parts, " "))

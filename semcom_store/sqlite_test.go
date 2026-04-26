@@ -40,9 +40,6 @@ func TestInsertGet(t *testing.T) {
 	if m.TurnID != 1 || m.Source != SourceUser || m.Raw != "hello world" {
 		t.Errorf("field mismatch: %+v", m)
 	}
-	if m.SummaryID != nil {
-		t.Errorf("expected nil SummaryID, got %v", m.SummaryID)
-	}
 
 	got := append([]uint32{}, m.SemKey...)
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })

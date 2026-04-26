@@ -15,8 +15,8 @@ type mockEmbedder struct {
 	queryTokens int
 }
 
-func (m *mockEmbedder) Query(_ string, _ semindex.Thresholds) ([]int32, semindex.QueryStats) {
-	return m.l0IDs, semindex.QueryStats{
+func (m *mockEmbedder) Query(_ string, _ semindex.Thresholds) semindex.QueryStats {
+	return semindex.QueryStats{
 		L0IDs:       m.l0IDs,
 		QueryTokens: m.queryTokens,
 	}
@@ -51,11 +51,10 @@ func TestIngest(t *testing.T) {
 			wantL0:      3,
 		},
 		{
-			name: "model message with summary",
+			name: "model message",
 			req: IngestRequest{
-				Text:      "a response",
-				Source:    semanticstore.SourceModel,
-				SummaryID: func() *int64 { v := int64(9); return &v }(),
+				Text:   "a response",
+				Source: semanticstore.SourceModel,
 			},
 			l0IDs:       []int32{1},
 			queryTokens: 1,

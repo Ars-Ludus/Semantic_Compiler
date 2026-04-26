@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
-	"os"
 	"os/signal"
 	"strconv"
 	"sync"
@@ -18,6 +18,7 @@ import (
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	semindex "semcom_embed"
+	seminternal "semcom_internal"
 	_ "modernc.org/sqlite"
 )
 
@@ -46,21 +47,18 @@ type BenchmarkEntry struct {
 
 const ringSize = 200
 
-// BenchmarkRing is a fixed-size ring buffer of recent benchmark entries.
+// BenchmarkRing is a bounded buffer of recent benchmark entries.
 type BenchmarkRing struct {
-	mu    sync.Mutex
-	buf   [ringSize]BenchmarkEntry
-	count int
-	head  int
+	mu  sync.Mutex
+	buf []BenchmarkEntry
 }
 
 func (r *BenchmarkRing) add(e BenchmarkEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.buf[r.head%ringSize] = e
-	r.head++
-	if r.count < ringSize {
-		r.count++
+	r.buf = append(r.buf, e)
+	if len(r.buf) > ringSize {
+		r.buf = r.buf[len(r.buf)-ringSize:]
 	}
 }
 
@@ -68,12 +66,12 @@ func (r *BenchmarkRing) add(e BenchmarkEntry) {
 func (r *BenchmarkRing) recent(n int) []BenchmarkEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if n > r.count {
-		n = r.count
+	if n > len(r.buf) {
+		n = len(r.buf)
 	}
 	out := make([]BenchmarkEntry, n)
 	for i := range n {
-		out[i] = r.buf[(r.head-1-i+ringSize)%ringSize]
+		out[i] = r.buf[len(r.buf)-1-i]
 	}
 	return out
 }
@@ -110,17 +108,10 @@ type Hit struct {
 	Raw      string `json:"raw"`
 }
 
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
 func main() {
-	indexPath := envOr("INDEX_PATH", "../semcom_embed/index.bin")
-	dbPath := envOr("DB_PATH", "../semcom_orchestrator/memory.db")
-	port := envOr("PORT", "8081")
+	indexPath := seminternal.EnvOr("INDEX_PATH", "../semcom_embed/index.bin")
+	dbPath := seminternal.EnvOr("DB_PATH", "../semcom_orchestrator/memory.db")
+	port := seminternal.EnvOr("PORT", "8081")
 
 	log.Printf("loading index from %s", indexPath)
 	idx, err := semindex.Load(indexPath)
@@ -251,7 +242,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t0 := time.Now()
-	_, stats := s.idx.Query(req.Text, s.thresholds)
+	stats := s.idx.Query(req.Text, s.thresholds)
 	embedUs := time.Since(t0).Microseconds()
 
 	l0IDs := make([]uint32, len(stats.L0IDs))
@@ -267,6 +258,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	for _, res := range retrieved {
 		raw, err := s.store.GetRaw(r.Context(), res.MemoryID)
 		if err != nil {
+			slog.Error("GetRaw", "memory_id", res.MemoryID, "err", err)
 			continue
 		}
 		hits = append(hits, Hit{MemoryID: res.MemoryID, Score: res.Score, Raw: raw})

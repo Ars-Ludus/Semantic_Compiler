@@ -12,7 +12,7 @@ import (
 
 // Embedder wraps Index.Query for testability.
 type Embedder interface {
-	Query(text string, th semindex.Thresholds) ([]int32, semindex.QueryStats)
+	Query(text string, th semindex.Thresholds) semindex.QueryStats
 }
 
 // Orchestrator wires semcom_embed, semcom_store, and semcom_retrieve into pipelines.
@@ -26,9 +26,8 @@ type Orchestrator struct {
 
 // IngestRequest is the input to the Ingest pipeline.
 type IngestRequest struct {
-	Text      string
-	Source    semanticstore.Source
-	SummaryID *int64
+	Text   string
+	Source semanticstore.Source
 }
 
 // IngestResult is returned after a successful Ingest.
@@ -43,7 +42,7 @@ type IngestResult struct {
 // Ingest embeds the text, then stores the result in semcom_store.
 func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestResult, error) {
 	t0 := time.Now()
-	_, stats := o.embed.Query(req.Text, o.thresholds)
+	stats := o.embed.Query(req.Text, o.thresholds)
 	embedUs := time.Since(t0).Microseconds()
 
 	semKeys := make([]uint32, len(stats.L0IDs))
@@ -53,11 +52,10 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 
 	t1 := time.Now()
 	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
-		TurnID:    o.turnSeq.Add(1),
-		SummaryID: req.SummaryID,
-		Source:    req.Source,
-		Raw:       req.Text,
-		SemKey:    semKeys,
+		TurnID: o.turnSeq.Add(1),
+		Source: req.Source,
+		Raw:    req.Text,
+		SemKey: semKeys,
 	})
 	if err != nil {
 		return IngestResult{}, err
@@ -114,7 +112,7 @@ type ChatResult struct {
 // prompt. Retrieve runs before Insert to avoid self-contamination.
 func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) {
 	t0 := time.Now()
-	_, stats := o.embed.Query(req.Prompt, o.thresholds)
+	stats := o.embed.Query(req.Prompt, o.thresholds)
 	embedUs := time.Since(t0).Microseconds()
 
 	l0IDs := make([]uint32, len(stats.L0IDs))
@@ -162,7 +160,7 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 // Retrieve embeds the query text and returns ranked memory_id + score pairs.
 func (o *Orchestrator) Retrieve(ctx context.Context, text string, k int) (RetrieveResult, error) {
 	t0 := time.Now()
-	_, stats := o.embed.Query(text, o.thresholds)
+	stats := o.embed.Query(text, o.thresholds)
 	queryUs := time.Since(t0).Microseconds()
 
 	queryL0IDs := make([]uint32, len(stats.L0IDs))

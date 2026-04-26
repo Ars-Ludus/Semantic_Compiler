@@ -15,7 +15,6 @@ const (
 type Memory struct {
 	ID        int64
 	TurnID    int64
-	SummaryID *int64
 	Source    Source
 	Raw       string
 	CreatedAt time.Time
