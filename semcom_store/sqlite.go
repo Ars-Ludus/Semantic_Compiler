@@ -3,6 +3,7 @@ package semanticstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	_ "embed"
 	"fmt"
 	"time"
@@ -36,9 +37,14 @@ func (s *sqliteStore) Insert(ctx context.Context, m *Memory) (int64, error) {
 	}
 	defer tx.Rollback()
 
+	personalIDsJSON, err := json.Marshal(m.PersonalIDs)
+	if err != nil {
+		return 0, fmt.Errorf("marshal personal IDs: %w", err)
+	}
+
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO memories (turn_id, summary_id, source, raw_message) VALUES (?, ?, ?, ?)`,
-		m.TurnID, m.SummaryID, string(m.Source), m.Raw,
+		`INSERT INTO memories (turn_id, summary_id, source, raw_message, personal_tokens) VALUES (?, ?, ?, ?, ?)`,
+		m.TurnID, m.SummaryID, string(m.Source), m.Raw, string(personalIDsJSON),
 	)
 	if err != nil {
 		return 0, err
@@ -63,12 +69,19 @@ func (s *sqliteStore) Insert(ctx context.Context, m *Memory) (int64, error) {
 func (s *sqliteStore) Get(ctx context.Context, id int64) (*Memory, error) {
 	m := &Memory{}
 	var createdAt string
+	var personalIDsJSON sql.NullString
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, turn_id, summary_id, source, raw_message, created_at FROM memories WHERE id = ?`, id,
-	).Scan(&m.ID, &m.TurnID, &m.SummaryID, &m.Source, &m.Raw, &createdAt)
+		`SELECT id, turn_id, summary_id, source, raw_message, personal_tokens, created_at FROM memories WHERE id = ?`, id,
+	).Scan(&m.ID, &m.TurnID, &m.SummaryID, &m.Source, &m.Raw, &personalIDsJSON, &createdAt)
 	if err != nil {
 		return nil, err
+	}
+
+	if personalIDsJSON.Valid && personalIDsJSON.String != "" {
+		if err := json.Unmarshal([]byte(personalIDsJSON.String), &m.PersonalIDs); err != nil {
+			return nil, fmt.Errorf("unmarshal personal IDs: %w", err)
+		}
 	}
 
 	m.CreatedAt, err = time.Parse("2006-01-02T15:04:05.999Z", createdAt)

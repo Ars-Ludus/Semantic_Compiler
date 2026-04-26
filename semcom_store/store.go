@@ -13,13 +13,14 @@ const (
 )
 
 type Memory struct {
-	ID        int64
-	TurnID    int64
-	SummaryID *int64
-	Source    Source
-	Raw       string
-	CreatedAt time.Time
-	SemKey    []uint32
+	ID          int64
+	TurnID      int64
+	SummaryID   *int64
+	Source      Source
+	Raw         string
+	CreatedAt   time.Time
+	SemKey      []uint32
+	PersonalIDs []uint32
 }
 
 // SemKeyRow is a (semkey value, memory ID) pair used by the retrieval layer

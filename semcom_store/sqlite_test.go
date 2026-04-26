@@ -23,10 +23,11 @@ func TestInsertGet(t *testing.T) {
 	ctx := context.Background()
 
 	id, err := s.Insert(ctx, &Memory{
-		TurnID: 1,
-		Source: SourceUser,
-		Raw:    "hello world",
-		SemKey: []uint32{3, 7, 42},
+		TurnID:      1,
+		Source:      SourceUser,
+		Raw:         "hello world",
+		SemKey:      []uint32{3, 7, 42},
+		PersonalIDs: []uint32{101, 102},
 	})
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -49,6 +50,10 @@ func TestInsertGet(t *testing.T) {
 	want := []uint32{3, 7, 42}
 	if !slices.Equal(got, want) {
 		t.Errorf("SemKey: got %v, want %v", got, want)
+	}
+
+	if !slices.Equal(m.PersonalIDs, []uint32{101, 102}) {
+		t.Errorf("PersonalIDs: got %v, want %v", m.PersonalIDs, []uint32{101, 102})
 	}
 }
 
