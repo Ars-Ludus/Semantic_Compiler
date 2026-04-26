@@ -65,6 +65,7 @@ type QueryStats struct {
 	L1          int
 	L0IDs       []int32
 	Tokens      int
+	OOVWords    []string
 }
 
 // Query tokenizes text and runs the hierarchical threshold search.
@@ -72,9 +73,9 @@ type QueryStats struct {
 // The query narrows at each level to only the tokens that matched in the
 // parent cluster, pruning irrelevant branches early.
 func (idx *Index) Query(text string, th Thresholds) ([]int32, QueryStats) {
-	q := tokenize(text, idx.words)
+	q, oov := tokenize(text, idx.words)
 	if q.IsEmpty() {
-		return nil, QueryStats{}
+		return nil, QueryStats{OOVWords: oov}
 	}
 
 	// L3: take top 5 clusters by raw match count
@@ -115,6 +116,7 @@ func (idx *Index) Query(text string, th Thresholds) ([]int32, QueryStats) {
 		L1:          len(l1pass),
 		L0IDs:       l0IDs,
 		Tokens:      len(out),
+		OOVWords:    oov,
 	}
 	return out, stats
 }

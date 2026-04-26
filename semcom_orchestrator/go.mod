@@ -32,4 +32,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.49.1 // indirect
+	semcom_personal v0.0.0-00010101000000-000000000000
 )
+
+replace semcom_personal => ../semcom_personal
