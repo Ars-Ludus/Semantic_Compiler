@@ -50,8 +50,35 @@ type IngestResult struct {
 
 // Ingest embeds the text, then stores the result in semcom_store.
 func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestResult, error) {
+	semKeys, stats, embedUs := o.embedAndMatch(req.Text)
+
+	t1 := time.Now()
+	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
+		TurnID:    o.turnSeq.Add(1),
+		SummaryID: req.SummaryID,
+		Source:    req.Source,
+		Raw:       req.Text,
+		SemKey:    semKeys,
+	})
+	if err != nil {
+		return IngestResult{}, err
+	}
+	storeUs := time.Since(t1).Microseconds()
+
+	return IngestResult{
+		MemoryID:    memoryID,
+		L0Count:     len(semKeys),
+		QueryTokens: stats.QueryTokens,
+		EmbedUs:     embedUs,
+		StoreUs:     storeUs,
+	}, nil
+}
+
+// embedAndMatch performs parallel embedding and personal matching, handles OOVs,
+// and returns the combined semantic keys, query stats, and duration in microseconds.
+func (o *Orchestrator) embedAndMatch(text string) ([]uint32, semindex.QueryStats, int64) {
 	t0 := time.Now()
-	words := semindex.SplitWords(req.Text)
+	words := semindex.SplitWords(text)
 	var stats semindex.QueryStats
 	var personalIDs []uint32
 	var unmapped []string
@@ -60,7 +87,7 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, stats = o.embed.Query(req.Text, o.thresholds)
+		_, stats = o.embed.Query(text, o.thresholds)
 	}()
 	go func() {
 		defer wg.Done()
@@ -69,11 +96,11 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 		}
 	}()
 	wg.Wait()
-	embedUs := time.Since(t0).Microseconds()
+	duration := time.Since(t0).Microseconds()
 
 	// Handle unmapped words: only those that were ALSO not in the global index.
 	if len(unmapped) > 0 && o.unmappedCh != nil {
-		oovSet := make(map[string]struct{})
+		oovSet := make(map[string]struct{}, len(stats.OOVWords))
 		for _, w := range stats.OOVWords {
 			oovSet[w] = struct{}{}
 		}
@@ -97,26 +124,7 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 	}
 	semKeys = append(semKeys, personalIDs...)
 
-	t1 := time.Now()
-	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
-		TurnID:    o.turnSeq.Add(1),
-		SummaryID: req.SummaryID,
-		Source:    req.Source,
-		Raw:       req.Text,
-		SemKey:    semKeys,
-	})
-	if err != nil {
-		return IngestResult{}, err
-	}
-	storeUs := time.Since(t1).Microseconds()
-
-	return IngestResult{
-		MemoryID:    memoryID,
-		L0Count:     len(semKeys),
-		QueryTokens: stats.QueryTokens,
-		EmbedUs:     embedUs,
-		StoreUs:     storeUs,
-	}, nil
+	return semKeys, stats, duration
 }
 
 // RetrieveResult is returned by a Retrieve call.
@@ -159,52 +167,7 @@ type ChatResult struct {
 // Chat embeds the prompt once, retrieves relevant past memories, then stores the
 // prompt. Retrieve runs before Insert to avoid self-contamination.
 func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) {
-	t0 := time.Now()
-	words := semindex.SplitWords(req.Prompt)
-	var stats semindex.QueryStats
-	var personalIDs []uint32
-	var unmapped []string
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, stats = o.embed.Query(req.Prompt, o.thresholds)
-	}()
-	go func() {
-		defer wg.Done()
-		if o.personal != nil {
-			personalIDs, unmapped = o.personal.Match(words)
-		}
-	}()
-	wg.Wait()
-	embedUs := time.Since(t0).Microseconds()
-
-	// Handle unmapped words
-	if len(unmapped) > 0 && o.unmappedCh != nil {
-		oovSet := make(map[string]struct{})
-		for _, w := range stats.OOVWords {
-			oovSet[w] = struct{}{}
-		}
-		var filtered []string
-		for _, w := range unmapped {
-			if _, ok := oovSet[w]; ok {
-				filtered = append(filtered, w)
-			}
-		}
-		if len(filtered) > 0 {
-			select {
-			case o.unmappedCh <- filtered:
-			default:
-			}
-		}
-	}
-
-	semKeys := make([]uint32, 0, len(stats.L0IDs)+len(personalIDs))
-	for _, id := range stats.L0IDs {
-		semKeys = append(semKeys, uint32(id))
-	}
-	semKeys = append(semKeys, personalIDs...)
+	semKeys, _, embedUs := o.embedAndMatch(req.Prompt)
 
 	t1 := time.Now()
 	retrieved := o.retriever.Query(semKeys, req.TopK)
@@ -245,52 +208,7 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 
 // Retrieve embeds the query text and returns ranked memory_id + score pairs.
 func (o *Orchestrator) Retrieve(ctx context.Context, text string, k int) (RetrieveResult, error) {
-	t0 := time.Now()
-	words := semindex.SplitWords(text)
-	var stats semindex.QueryStats
-	var personalIDs []uint32
-	var unmapped []string
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, stats = o.embed.Query(text, o.thresholds)
-	}()
-	go func() {
-		defer wg.Done()
-		if o.personal != nil {
-			personalIDs, unmapped = o.personal.Match(words)
-		}
-	}()
-	wg.Wait()
-	queryUs := time.Since(t0).Microseconds()
-
-	// Handle unmapped words: only those that were ALSO not in the global index.
-	if len(unmapped) > 0 && o.unmappedCh != nil {
-		oovSet := make(map[string]struct{})
-		for _, w := range stats.OOVWords {
-			oovSet[w] = struct{}{}
-		}
-		var filtered []string
-		for _, w := range unmapped {
-			if _, ok := oovSet[w]; ok {
-				filtered = append(filtered, w)
-			}
-		}
-		if len(filtered) > 0 {
-			select {
-			case o.unmappedCh <- filtered:
-			default:
-			}
-		}
-	}
-
-	queryL0IDs := make([]uint32, 0, len(stats.L0IDs)+len(personalIDs))
-	for _, id := range stats.L0IDs {
-		queryL0IDs = append(queryL0IDs, uint32(id))
-	}
-	queryL0IDs = append(queryL0IDs, personalIDs...)
+	queryL0IDs, stats, queryUs := o.embedAndMatch(text)
 
 	results := o.retriever.Query(queryL0IDs, k)
 
