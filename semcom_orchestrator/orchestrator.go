@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -102,11 +103,11 @@ func (o *Orchestrator) embedAndMatch(text string) ([]uint32, semindex.QueryStats
 	if len(unmapped) > 0 && o.unmappedCh != nil {
 		oovSet := make(map[string]struct{}, len(stats.OOVWords))
 		for _, w := range stats.OOVWords {
-			oovSet[w] = struct{}{}
+			oovSet[strings.ToLower(w)] = struct{}{}
 		}
 		var filtered []string
 		for _, w := range unmapped {
-			if _, ok := oovSet[w]; ok {
+			if _, ok := oovSet[strings.ToLower(w)]; ok {
 				filtered = append(filtered, w)
 			}
 		}
@@ -118,11 +119,22 @@ func (o *Orchestrator) embedAndMatch(text string) ([]uint32, semindex.QueryStats
 		}
 	}
 
+
 	semKeys := make([]uint32, 0, len(stats.L0IDs)+len(personalIDs))
+	seen := make(map[uint32]struct{})
 	for _, id := range stats.L0IDs {
-		semKeys = append(semKeys, uint32(id))
+		u := uint32(id)
+		if _, ok := seen[u]; !ok {
+			semKeys = append(semKeys, u)
+			seen[u] = struct{}{}
+		}
 	}
-	semKeys = append(semKeys, personalIDs...)
+	for _, id := range personalIDs {
+		if _, ok := seen[id]; !ok {
+			semKeys = append(semKeys, id)
+			seen[id] = struct{}{}
+		}
+	}
 
 	return semKeys, stats, duration
 }

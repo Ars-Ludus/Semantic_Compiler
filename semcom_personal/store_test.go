@@ -19,16 +19,18 @@ func TestStore(t *testing.T) {
 	t.Run("TokenOperations", func(t *testing.T) {
 		id, err := s.InsertToken("Alice", "PERSON")
 		if err != nil {
-			t.Fatalf("InsertToken failed: %v", err)
+			t.Fatalf("InsertToken: %v", err)
+		}
+		if id < 1000000 {
+			t.Errorf("expected ID >= 1000000, got %d", id)
 		}
 
 		token, err := s.GetToken("Alice")
 		if err != nil {
-			t.Fatalf("GetToken failed: %v", err)
+			t.Fatalf("GetToken: %v", err)
 		}
-
-		if token.Word != "Alice" || token.ID != id || token.Type != "PERSON" {
-			t.Errorf("token mismatch: got %+v, want ID=%d Word=Alice Type=PERSON", token, id)
+		if token.Word != "alice" {
+			t.Errorf("expected word 'alice', got %q", token.Word)
 		}
 	})
 

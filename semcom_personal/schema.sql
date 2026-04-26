@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS personal_tokens (
     word  TEXT NOT NULL UNIQUE,
     type  TEXT NOT NULL -- e.g., "PERSON", "PLACE", "EVENT"
 );
+-- Start personal IDs at 1,000,000 to avoid collision with global L0 IDs
+INSERT INTO sqlite_sequence (name, seq) VALUES ('personal_tokens', 999999);
 
 CREATE TABLE IF NOT EXISTS personal_ignore (
     word  TEXT PRIMARY KEY

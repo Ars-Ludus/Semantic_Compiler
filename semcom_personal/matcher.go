@@ -1,6 +1,7 @@
 package personal
 
 import (
+	"strings"
 	"sync"
 )
 
@@ -40,6 +41,7 @@ func (m *Matcher) Match(words []string) (hits []uint32, unmapped []string) {
 	unmapped = make([]string, 0, len(words))
 
 	for _, word := range words {
+		word = strings.ToLower(word)
 		if _, ok := m.ignore[word]; ok {
 			continue
 		}
@@ -54,6 +56,7 @@ func (m *Matcher) Match(words []string) (hits []uint32, unmapped []string) {
 
 // AddToken incrementally adds a token to the matcher's memory.
 func (m *Matcher) AddToken(word string, id uint32) {
+	word = strings.ToLower(word)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tokens[word] = id
@@ -61,6 +64,7 @@ func (m *Matcher) AddToken(word string, id uint32) {
 
 // AddIgnore incrementally adds a word to the ignore list in memory.
 func (m *Matcher) AddIgnore(word string) {
+	word = strings.ToLower(word)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ignore[word] = struct{}{}

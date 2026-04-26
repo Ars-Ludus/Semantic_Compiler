@@ -11,6 +11,7 @@ import (
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	semindex "semcom_embed"
+	personal "semcom_personal"
 )
 
 func envOr(key, def string) string {
@@ -23,6 +24,7 @@ func envOr(key, def string) string {
 func main() {
 	indexPath := envOr("INDEX_PATH", "index.bin")
 	dbPath := envOr("DB_PATH", "memory.db")
+	personalDBPath := envOr("PERSONAL_DB_PATH", "personal.db")
 	port := envOr("PORT", "8080")
 
 	idx, err := semindex.Load(indexPath)
@@ -36,6 +38,17 @@ func main() {
 	}
 	defer store.Close()
 
+	pStore, err := personal.Open(personalDBPath)
+	if err != nil {
+		log.Fatalf("open personal store: %v", err)
+	}
+	defer pStore.Close()
+
+	pMatcher, err := personal.NewMatcher(pStore)
+	if err != nil {
+		log.Fatalf("create personal matcher: %v", err)
+	}
+
 	retriever, err := semcomretrieve.Open(store, semcomretrieve.Options{AutoRefresh: true})
 	if err != nil {
 		log.Fatalf("open retriever: %v", err)
@@ -47,11 +60,15 @@ func main() {
 		log.Fatalf("read max turn_id: %v", err)
 	}
 
+	unmappedCh := make(chan []string, 100)
+
 	orch := &Orchestrator{
 		embed:      idx,
+		personal:   pMatcher,
 		thresholds: semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},
 		store:      store,
 		retriever:  retriever,
+		unmappedCh: unmappedCh,
 	}
 	orch.turnSeq.Store(maxTurn)
 
@@ -62,6 +79,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Start discovery worker
+	go startDiscoveryWorker(ctx, pStore, pMatcher, unmappedCh, &MockLLM{})
 
 	go func() {
 		log.Printf("listening on :%s (index=%s db=%s)", port, indexPath, dbPath)
