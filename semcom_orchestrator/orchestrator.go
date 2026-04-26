@@ -8,6 +8,7 @@ import (
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	semindex "semcom_embed"
+	personal "semcom_personal"
 )
 
 // Embedder wraps Index.Query for testability.
@@ -15,13 +16,21 @@ type Embedder interface {
 	Query(text string, th semindex.Thresholds) semindex.QueryStats
 }
 
+// PersonalMatcher wraps personal.Matcher.Match for testability.
+type PersonalMatcher interface {
+	Match(words []string) ([]uint32, []string)
+	AddToken(word string, id uint32)
+}
+
 // Orchestrator wires semcom_embed, semcom_store, and semcom_retrieve into pipelines.
 type Orchestrator struct {
-	embed      Embedder
-	thresholds semindex.Thresholds
-	store      semanticstore.Store
-	retriever  *semcomretrieve.Retriever
-	turnSeq    atomic.Int64 // monotonically increasing; seeded from DB at startup
+	embed         Embedder
+	personal      PersonalMatcher
+	personalStore *personal.Store
+	thresholds    semindex.Thresholds
+	store         semanticstore.Store
+	retriever     *semcomretrieve.Retriever
+	turnSeq       atomic.Int64 // monotonically increasing; seeded from DB at startup
 }
 
 // IngestRequest is the input to the Ingest pipeline.
@@ -45,17 +54,23 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 	stats := o.embed.Query(req.Text, o.thresholds)
 	embedUs := time.Since(t0).Microseconds()
 
-	semKeys := make([]uint32, len(stats.L0IDs))
-	for i, id := range stats.L0IDs {
-		semKeys[i] = uint32(id)
+	globalKeys := make([]uint32, 0, len(stats.L0IDs))
+	seen := make(map[uint32]struct{})
+	for _, id := range stats.L0IDs {
+		u := uint32(id)
+		if _, ok := seen[u]; !ok {
+			globalKeys = append(globalKeys, u)
+			seen[u] = struct{}{}
+		}
 	}
 
 	t1 := time.Now()
+	// personal_tokens column is left NULL (represented by nil PersonalIDs in Memory struct)
 	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
 		TurnID: o.turnSeq.Add(1),
 		Source: req.Source,
 		Raw:    req.Text,
-		SemKey: semKeys,
+		SemKey: globalKeys,
 	})
 	if err != nil {
 		return IngestResult{}, err
@@ -64,7 +79,7 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 
 	return IngestResult{
 		MemoryID:    memoryID,
-		L0Count:     len(stats.L0IDs),
+		L0Count:     len(globalKeys),
 		QueryTokens: stats.QueryTokens,
 		EmbedUs:     embedUs,
 		StoreUs:     storeUs,
@@ -115,13 +130,18 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 	stats := o.embed.Query(req.Prompt, o.thresholds)
 	embedUs := time.Since(t0).Microseconds()
 
-	l0IDs := make([]uint32, len(stats.L0IDs))
-	for i, id := range stats.L0IDs {
-		l0IDs[i] = uint32(id)
+	globalKeys := make([]uint32, 0, len(stats.L0IDs))
+	seen := make(map[uint32]struct{})
+	for _, id := range stats.L0IDs {
+		u := uint32(id)
+		if _, ok := seen[u]; !ok {
+			globalKeys = append(globalKeys, u)
+			seen[u] = struct{}{}
+		}
 	}
 
 	t1 := time.Now()
-	retrieved := o.retriever.Query(l0IDs, req.TopK)
+	retrieved := o.retriever.Query(globalKeys, req.TopK)
 	retrieveUs := time.Since(t1).Microseconds()
 
 	hits := make([]MemoryHit, 0, len(retrieved))
@@ -138,7 +158,7 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 		TurnID: o.turnSeq.Add(1),
 		Source: req.By,
 		Raw:    req.Prompt,
-		SemKey: l0IDs,
+		SemKey: globalKeys,
 	})
 	if err != nil {
 		return ChatResult{}, err
@@ -163,17 +183,22 @@ func (o *Orchestrator) Retrieve(ctx context.Context, text string, k int) (Retrie
 	stats := o.embed.Query(text, o.thresholds)
 	queryUs := time.Since(t0).Microseconds()
 
-	queryL0IDs := make([]uint32, len(stats.L0IDs))
-	for i, id := range stats.L0IDs {
-		queryL0IDs[i] = uint32(id)
+	globalKeys := make([]uint32, 0, len(stats.L0IDs))
+	seen := make(map[uint32]struct{})
+	for _, id := range stats.L0IDs {
+		u := uint32(id)
+		if _, ok := seen[u]; !ok {
+			globalKeys = append(globalKeys, u)
+			seen[u] = struct{}{}
+		}
 	}
 
-	results := o.retriever.Query(queryL0IDs, k)
+	results := o.retriever.Query(globalKeys, k)
 
 	return RetrieveResult{
 		Results:     results,
 		QueryTokens: stats.QueryTokens,
-		L0Count:     len(stats.L0IDs),
+		L0Count:     len(globalKeys),
 		QueryUs:     queryUs,
 	}, nil
 }

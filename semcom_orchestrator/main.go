@@ -4,19 +4,36 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	semindex "semcom_embed"
+	personal "semcom_personal"
 	seminternal "semcom_internal"
+
+	"github.com/Ars-Ludus/providertron/provider"
+	"github.com/Ars-Ludus/providertron/providers/gemini"
 )
 
 func main() {
 	indexPath := seminternal.EnvOr("INDEX_PATH", "index.bin")
 	dbPath := seminternal.EnvOr("DB_PATH", "memory.db")
+	personalDBPath := seminternal.EnvOr("PERSONAL_DB_PATH", "personal.db")
 	port := seminternal.EnvOr("PORT", "8080")
+
+	subcommand := "serve"
+	if len(os.Args) > 1 {
+		subcommand = os.Args[1]
+	}
+
+	switch subcommand {
+	case "serve", "discover", "distill":
+	default:
+		log.Fatalf("unknown subcommand %q; use: serve, discover, distill", subcommand)
+	}
 
 	idx, err := semindex.Load(indexPath)
 	if err != nil {
@@ -28,6 +45,17 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
+
+	pStore, err := personal.Open(personalDBPath)
+	if err != nil {
+		log.Fatalf("open personal store: %v", err)
+	}
+	defer pStore.Close()
+
+	pMatcher, err := personal.NewMatcher(pStore)
+	if err != nil {
+		log.Fatalf("create personal matcher: %v", err)
+	}
 
 	retriever, err := semcomretrieve.Open(store, semcomretrieve.Options{AutoRefresh: true})
 	if err != nil {
@@ -41,29 +69,69 @@ func main() {
 	}
 
 	orch := &Orchestrator{
-		embed:      idx,
-		thresholds: semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},
-		store:      store,
-		retriever:  retriever,
+		embed:         idx,
+		personal:      pMatcher,
+		personalStore: pStore,
+		thresholds:    semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},
+		store:         store,
+		retriever:     retriever,
 	}
 	orch.turnSeq.Store(maxTurn)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/chat", orch.handleChat)
-
-	srv := &http.Server{Addr: ":" + port, Handler: mux}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go func() {
-		log.Printf("listening on :%s (index=%s db=%s)", port, indexPath, dbPath)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("serve: %v", err)
+	switch subcommand {
+	case "discover":
+		client := newLLMClient()
+		if err := RunDiscoveryPass(ctx, orch, client); err != nil {
+			log.Fatalf("discovery: %v", err)
 		}
-	}()
+		log.Println("discovery complete.")
 
-	<-ctx.Done()
-	log.Println("shutting down")
-	srv.Shutdown(context.Background())
+	case "distill":
+		client := newLLMClient()
+		log.Println("running discovery pass before distillation...")
+		if err := RunDiscoveryPass(ctx, orch, client); err != nil {
+			log.Fatalf("discovery: %v", err)
+		}
+		if err := RunDistillationPass(ctx, orch, client); err != nil {
+			log.Fatalf("distillation: %v", err)
+		}
+		log.Println("distillation complete.")
+
+	case "serve":
+		mux := http.NewServeMux()
+		mux.HandleFunc("/chat", orch.handleChat)
+
+		srv := &http.Server{Addr: ":" + port, Handler: mux}
+		go func() {
+			log.Printf("listening on :%s (index=%s db=%s)", port, indexPath, dbPath)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("serve: %v", err)
+			}
+		}()
+
+		<-ctx.Done()
+		log.Println("shutting down")
+		srv.Shutdown(context.Background())
+	}
+}
+
+func newLLMClient() *ProvidertronClient {
+	apiKey := seminternal.EnvOr("GOOGLE_API_KEY", seminternal.EnvOr("GEMINI_API_KEY", ""))
+	if apiKey == "" {
+		log.Fatal("GOOGLE_API_KEY or GEMINI_API_KEY required for LLM passes")
+	}
+	model := seminternal.EnvOr("GEMINI_MODEL", "gemini-2.5-flash-preview-04-17")
+	cfg := &gemini.Config{APIKey: apiKey, Model: model}
+	backend, err := gemini.New(cfg)
+	if err != nil {
+		log.Fatalf("create gemini backend: %v", err)
+	}
+	p, err := provider.New(cfg, backend)
+	if err != nil {
+		log.Fatalf("create provider: %v", err)
+	}
+	return NewProvidertronClient(p, model)
 }
