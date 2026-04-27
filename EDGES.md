@@ -21,8 +21,19 @@ The primary bridge between isolated libraries.
 - **Retrieval**: `semcom_orchestrator` -> `semcom_retrieve`
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Contextual data fetching.
+- **LLM Integration**: `semcom_orchestrator` -> `semcom_llm`
+  - File: `semcom_orchestrator/main.go`
+  - Usage: Providing LLM capability to personal discovery and distillation.
 
 > For deeper technical details on orchestrator components, see `semcom_orchestrator/COMPONENTS.md`.
+
+## Retrieval Layer: semcom_retrieve
+Contextual data fetching services.
+
+### Edges
+- **Retrieve-Store Dependency**: `semcom_retrieve` -> `semcom_store`
+  - File: `semcom_retrieve/retriever.go`
+  - Usage: Retrieving contextual data directly from the memory store. (Note: This is a known isolation violation that will be refactored later).
 
 ## Workspace Structure
 Managed via `go.work`.
