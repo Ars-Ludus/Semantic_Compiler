@@ -16,11 +16,13 @@ The primary bridge between isolated libraries.
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Token discovery and memory matching.
 - **Distillation**: `semcom_orchestrator` -> `semcom_distill`
-  - File: `semcom_orchestrator/orchestrator.go`
+  - File: `semcom_orchestrator/orchestrator.go`, `semcom_orchestrator/distillation.go`
   - Usage: Raw message processing.
 - **Retrieval**: `semcom_orchestrator` -> `semcom_retrieve`
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Contextual data fetching.
+
+> For deeper technical details on orchestrator components, see `semcom_orchestrator/COMPONENTS.md`.
 
 ## Workspace Structure
 Managed via `go.work`.
@@ -28,3 +30,8 @@ Managed via `go.work`.
 - `/semcom_store`: SQLite-backed memory store.
 - `/semcom_personal`: Personal token registry.
 - `/semcom_orchestrator`: Main integration service.
+- `/semcom_distill`: Raw message processing.
+- `/semcom_retrieve`: Contextual data fetching.
+- `/semcom_llm`: LLM integration layer.
+- `/dashboard`: Web-based visualization.
+- `/internal`: Shared utilities and environment configuration.
