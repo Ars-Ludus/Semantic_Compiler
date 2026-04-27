@@ -1,130 +1,129 @@
 # semcom Components Reference
 
-Single-file reference for all three components in the semantic memory pipeline.
+Interface reference for all pipeline components. All components are in-process Go imports — no network calls between them.
 
 ```
-[caller] --HTTP POST /ingest--> [semcom_orchestrator]
-                                        |
-                          gRPC Query()  |  library Insert()
-                                   +----|----+
-                                   v         v
-                           [semcom_embed] [semcom_store]
-                           (gRPC :50051)  (SQLite file)
+POST /chat
+     │
+     ▼
+[semcom_orchestrator]
+     │
+     ├─ semcom_embed.Index.Query()       — semantic fingerprint
+     ├─ semcom_retrieve.Retriever.Query() — ranked memory hits
+     ├─ semcom_store.Store               — memory persistence
+     ├─ semcom_personal.Store + Matcher  — personal token registry
+     └─ semcom_distill.Store             — distillation persistence
 ```
 
 ---
 
 ## semcom_embed
 
-Converts text into a semantic fingerprint: an array of `l0_ids` (integer cluster IDs). Does not return a vector. Runs as a standalone gRPC server with a preloaded in-memory index.
+Converts text to a semantic fingerprint: a set of L0 cluster IDs from a 4-level hierarchical index. All queries run in memory.
 
 **Source:** `../semcom_embed`  
-**Module:** `semcom_embed` (local)  
-**Protocol:** gRPC, default port `:50051`
+**Module:** `semcom_embed` (replace directive)  
+**Import:** `semindex "semcom_embed"`
 
-### Proto Definition
-
-```proto
-service SemComEmbed {
-  rpc Query (QueryRequest) returns (QueryResponse);
-}
-
-message QueryRequest {
-  string text = 1;
-  float t2 = 2;  // L2 threshold override (default: 0.25, zero = use server default)
-  float t1 = 3;  // L1 threshold override (default: 0.20)
-  float t0 = 4;  // L0 threshold override (default: 0.15)
-}
-
-message QueryResponse {
-  repeated int32 l0_ids      = 1;  // semantic fingerprint — primary output
-  int32          query_tokens = 2; // vocabulary words matched
-  int32          l3_count    = 3;
-  int32          l2_count    = 4;
-  int32          l1_count    = 5;
-  int32          l0_count    = 6;
-  int64          query_us    = 7;  // processing time in microseconds
-}
-```
-
-Generated stubs: `semcom_embed/proto/semcom.pb.go`, `semcom_embed/proto/semcom_grpc.pb.go`
-
-### Go Client
+### Index
 
 ```go
-import (
-    pb "semcom_embed/proto"
-    "google.golang.org/grpc"
-    "google.golang.org/grpc/credentials/insecure"
-)
+// Load reads the index file once at startup (~22ms).
+idx, err := semindex.Load("index.bin")
 
-conn, _ := grpc.NewClient(":50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
-client := pb.NewSemComEmbedClient(conn)
-resp, _ := client.Query(ctx, &pb.QueryRequest{Text: "input text"})
-// resp.L0Ids — []int32 semantic fingerprint
+// Query is safe for concurrent use (~130µs per call).
+stats := idx.Query("input text", semindex.Thresholds{
+    L2: 0.25,
+    L1: 0.20,
+    L0: 0.15,
+})
 ```
 
-### Starting the Server
+### QueryStats
+
+```go
+type QueryStats struct {
+    QueryTokens int      // vocabulary words matched
+    L3          int      // L3 clusters passed
+    L2          int      // L2 clusters passed
+    L1          int      // L1 clusters passed
+    L0IDs       []int32  // passing L0 cluster IDs (semantic fingerprint)
+    TokenIDs    []int32  // individual token IDs that contributed
+    OOVWords    []string // words not found in the vocabulary
+}
+```
+
+`L0IDs` is the primary output. `OOVWords` is used by the discovery pass to identify candidate personal tokens.
+
+### Thresholds
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `L2` | `0.25` | Minimum match ratio at L2 |
+| `L1` | `0.20` | Minimum match ratio at L1 |
+| `L0` | `0.15` | Minimum match ratio at L0 |
+
+### CLI
 
 ```bash
-cd ~/lab/projects/semcom_embed
-./semcom serve --index index.bin --addr :50051
+# Build the index from PostgreSQL:
+semcom build --dsn "postgres://user@host:5432/memory_db" --out index.bin
+
+# Query the index:
+semcom query --index index.bin "your input text"
 ```
-
-The index takes ~22ms to load; all queries are served from memory in ~130µs.
-
-### Server Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--index` | `index.bin` | Path to built index file |
-| `--addr` | `:50051` | TCP listen address |
-| `--t2` | `0.25` | L2 match ratio threshold |
-| `--t1` | `0.20` | L1 match ratio threshold |
-| `--t0` | `0.15` | L0 match ratio threshold |
-
-### Output Characteristics
-
-`l0_ids` is an unordered set of integers. Typical counts: 1–3 for a single word, 5–15 for a short phrase, 10–30 for a full sentence. Similarity between two inputs is measured by set intersection (Jaccard or cardinality).
 
 ---
 
 ## semcom_store
 
-Persists memory records with their semantic keys in a SQLite database. Imported as a Go library — not a network service.
+Persists memory records and their semkey associations. Backed by SQLite.
 
 **Source:** `../semcom_store`  
-**Module:** `github.com/ars/semantic_store` (use `replace` directive, see go.mod)  
-**Protocol:** Direct library import
+**Module:** `github.com/ars/semantic_store` (replace directive)  
+**Import:** `semanticstore "github.com/ars/semantic_store"`
+
+### Opening
+
+```go
+store, err := semanticstore.Open("memory.db")
+defer store.Close()
+```
 
 ### Store Interface
 
 ```go
-import semanticstore "github.com/ars/semantic_store"
-
-// Open creates or opens a SQLite store at path; schema is auto-created.
-store, err := semanticstore.Open("/path/to/memories.db")
-
 type Store interface {
     Insert(ctx context.Context, m *Memory) (int64, error)
     Get(ctx context.Context, id int64) (*Memory, error)
-    AllSemKeys(ctx context.Context) ([]SemKeyRow, error)       // full index rebuild
-    SemKeysSince(ctx context.Context, afterID int64) ([]SemKeyRow, error) // incremental
+    GetRaw(ctx context.Context, id int64) (string, error)
+
+    AllSemKeys(ctx context.Context) ([]SemKeyRow, error)
+    SemKeysSince(ctx context.Context, afterID int64) ([]SemKeyRow, error)
+    MaxTurnID(ctx context.Context) (int64, error)
+
+    UnprocessedMemories(ctx context.Context) ([]*Memory, error)
+    MarkMemoryDiscovered(ctx context.Context, memoryID int64) error
+    GetChunk(ctx context.Context, startID, endID int64) ([]*Memory, error)
+    MemoriesContainingWord(ctx context.Context, word string) ([]*Memory, error)
+    UpdateMemoryPersonalTokens(ctx context.Context, memoryID int64, personalIDs []uint32) error
+
     Close() error
 }
 ```
 
-### Data Types
+### Memory
 
 ```go
 type Memory struct {
-    ID        int64
-    TurnID    int64
-    SummaryID *int64           // optional
-    Source    Source           // "user" or "model"
-    Raw       string
-    CreatedAt time.Time
-    SemKey    []uint32         // L0 cluster IDs from semcom_embed
+    ID          int64
+    TurnID      int64
+    Source      Source           // "user" | "model"
+    Raw         string
+    CreatedAt   time.Time
+    SemKey      []uint32         // L0 cluster IDs
+    PersonalIDs []uint32         // personal token IDs (nil until discovery runs)
+    Discovered  bool
 }
 
 type Source string
@@ -132,23 +131,19 @@ const (
     SourceUser  Source = "user"
     SourceModel Source = "model"
 )
-
-type SemKeyRow struct {
-    Value    uint32
-    MemoryID int64
-}
 ```
 
-### Schema (auto-applied)
+### Schema
 
 ```sql
 CREATE TABLE memories (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    turn_id    INTEGER NOT NULL,
-    summary_id INTEGER,
-    source     TEXT NOT NULL CHECK(source IN ('user','model')),
-    raw_message TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    turn_id         INTEGER NOT NULL,
+    source          TEXT    NOT NULL CHECK(source IN ('user','model')),
+    raw_message     TEXT    NOT NULL,
+    personal_tokens TEXT,           -- JSON []uint32, set by discovery pass
+    discovered      INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE TABLE memory_semkeys (
@@ -156,84 +151,171 @@ CREATE TABLE memory_semkeys (
     semkey_value INTEGER NOT NULL,
     PRIMARY KEY (memory_id, semkey_value)
 );
-
 CREATE INDEX idx_semkeys_value ON memory_semkeys(semkey_value);
 ```
 
 ---
 
-## semcom_orchestrator
+## semcom_retrieve
 
-Receives memory ingestion requests over HTTP, calls semcom_embed for the semantic fingerprint, then persists the result via semcom_store.
+In-memory roaring bitmap reverse index over semcom_store. Querying is sub-millisecond.
 
-**Source:** `../semcom_orchestrator` (this repo)  
-**Protocol:** HTTP REST, default port `:8080`
+**Source:** `../semcom_retrieve`  
+**Module:** `github.com/ars/semcom_retrieve` (replace directive)  
+**Import:** `semcomretrieve "github.com/ars/semcom_retrieve"`
 
-### POST /ingest
+### Opening
 
-**Request:**
-```json
-{
-  "text":       "the raw message text",
-  "turn_id":    1,
-  "source":     "user",
-  "summary_id": null
+```go
+retriever, err := semcomretrieve.Open(store, semcomretrieve.Options{AutoRefresh: true})
+defer retriever.Close()
+```
+
+`AutoRefresh: true` starts a background goroutine that calls `SemKeysSince` every 50ms to keep the index current without a full rebuild.
+
+### Querying
+
+```go
+results := retriever.Query(l0IDs, topK)  // []Result{MemoryID int64, Score int}
+```
+
+`Score` is the count of shared L0 cluster IDs between the query and that memory.
+
+---
+
+## semcom_personal
+
+Personal token registry: stores known entities (people, projects, etc.) and maps them to memory IDs.
+
+**Source:** `../semcom_personal`  
+**Module:** `semcom_personal` (replace directive)  
+**Import:** `personal "semcom_personal"`
+
+### Opening
+
+Takes a `*sql.DB` — lifecycle managed by the caller.
+
+```go
+db, _ := sql.Open("sqlite", "personal.db")
+db.Exec(personal.Schema)
+pStore := personal.NewStore(db)
+```
+
+### Store Methods
+
+```go
+func (s *Store) InsertToken(word, tokenType string) (uint32, error)
+func (s *Store) GetToken(word string) (*Token, error)
+func (s *Store) GetAllTokens() (map[string]uint32, error)
+func (s *Store) LinkMemory(memoryID int64, personalIDs []uint32) error
+```
+
+### Matcher
+
+```go
+pMatcher, err := personal.NewMatcher(pStore) // loads all tokens into memory
+
+hits, unmapped := pMatcher.Match([]string{"Alice", "project"})
+// hits     — []uint32, personal token IDs for known words
+// unmapped — []string, words not in the registry
+
+pMatcher.AddToken("NewEntity", id) // incremental update without DB round-trip
+```
+
+### Token
+
+```go
+type Token struct {
+    ID   uint32
+    Word string  // always lowercase
+    Type string  // e.g. "PERSON", "PLACE", "TOPIC"
 }
 ```
 
-- `text` — required, non-empty
-- `source` — required, `"user"` or `"model"`
-- `summary_id` — optional integer
+### LLMClient Interface
 
-**Response (200):**
-```json
-{
-  "memory_id":    1,
-  "l0_count":     12,
-  "query_tokens": 5,
-  "query_us":     130
+```go
+type LLMClient interface {
+    GenerateJSON(ctx context.Context, prompt string, target interface{}) error
+}
+
+resp, err := personal.Discover(ctx, llm, rawMessage)
+// resp.Topics — []string extracted by the LLM
+```
+
+---
+
+## semcom_distill
+
+Distillation store and LLM call. Compresses conversation chunks into topic/snippet pairs.
+
+**Source:** `../semcom_distill`  
+**Module:** `semcom_distill` (replace directive)  
+**Import:** `distill "semcom_distill"`
+
+### Opening
+
+Takes the same `*sql.DB` as semcom_personal — both share one connection.
+
+```go
+db.Exec(distill.Schema)
+dStore := distill.NewStore(db)
+```
+
+### Distill
+
+```go
+type LLMClient interface {
+    GenerateJSON(ctx context.Context, prompt string, target interface{}) error
+}
+
+resp, err := distill.Distill(ctx, llm, conversationChunk)
+// resp.Distillations — []DistilledSnippet{{Topic, Snippet}}
+```
+
+### Store Methods
+
+```go
+func (s *Store) InsertDistillation(d *Distillation) (int64, error)
+func (s *Store) GetMetadata(key string) (string, error)   // "" if not set
+func (s *Store) SetMetadata(key, value string) error      // upsert
+```
+
+### Distillation
+
+```go
+type Distillation struct {
+    ID          int64
+    Topic       string
+    Snippet     string
+    PersonalIDs []uint32  // related personal token IDs
+    SemKeys     []uint32  // L0 cluster IDs for the snippet
 }
 ```
 
-**Error (4xx/5xx):**
-```json
-{"error": "text is required"}
+---
+
+## semcom_llm
+
+Concrete LLM client wrapping providertron/gemini. Satisfies the `LLMClient` interface of both semcom_personal and semcom_distill via structural typing.
+
+**Source:** `../semcom_llm`  
+**Module:** `semcom_llm` (replace directive)  
+**Import:** `llmclient "semcom_llm"`
+
+```go
+client, err := llmclient.New(apiKey, model)
+// client.GenerateJSON satisfies personal.LLMClient and distill.LLMClient
 ```
-
-### Configuration (environment variables)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `EMBED_ADDR` | `:50051` | semcom_embed gRPC address |
-| `DB_PATH` | `memory.db` | SQLite database file path |
-| `PORT` | `8080` | HTTP listen port |
-
-### Starting the Server
-
-```bash
-cd ~/lab/projects/semcom_orchestrator
-EMBED_ADDR=:50051 DB_PATH=memory.db PORT=8080 ./semcom_orchestrator
-```
-
-### Startup Sequence
-
-1. Open SQLite store (creates file + schema if missing)
-2. Dial semcom_embed via gRPC (lazy — no index load happens here)
-3. Register `POST /ingest` handler
-4. Serve HTTP; shutdown cleanly on SIGINT/SIGTERM
 
 ---
 
 ## Protocol Rationale
 
-**semcom_embed is gRPC** because it holds a stateful 27MB in-memory index and must run as its own process. gRPC is the right protocol for a long-lived service called from Go with well-defined request/response types.
+**Everything is a library.** semcom_embed previously ran as a gRPC server; it is now an in-process import. This eliminates a network hop, removes the proto/stub layer, and simplifies deployment to a single binary.
 
-**semcom_store is a library** because it wraps SQLite, an embedded database. The orchestrator is its only consumer and is already Go. Wrapping SQLite in a gRPC server would add process isolation with no benefit and risk write-lock contention (SQLite supports one writer). If distribution is ever needed, the `Store` interface is the right extension point — only the implementation changes, not the orchestrator's import.
+**One SQLite connection for personalization.** semcom_personal and semcom_distill share a single `*sql.DB` opened by the orchestrator. This allows cross-table transactions and joins between personal tokens and distillations without SQLite file-locking complications.
 
-**semcom_orchestrator exposes HTTP REST** because its callers are LLM application code (Python, shell scripts, tool-use frameworks) that speak HTTP natively. gRPC would require stub generation on every caller.
+**semcom_store remains separate.** The main memory store (`memory.db`) is distinct from the personalization store (`personal.db`). The two datasets have different growth characteristics and access patterns — memories are written on every chat turn, while personal data is written only during background passes.
 
----
-
-## Known Issues
-
-- `sqlite.go` in semcom_store parses `created_at` with a fixed-precision layout (`2006-01-02T15:04:05.999Z`). This may fail on timestamps without fractional seconds (e.g. `2024-01-01T00:00:00Z`). SQLite's `strftime` with `%f` always emits three decimal places, so this is unlikely to trigger in practice — but worth fixing if `Get` is called on externally inserted rows.
+**LLMClient is defined locally in each module.** Both semcom_personal and semcom_distill define their own one-method `LLMClient` interface. The concrete `semcom_llm.Client` satisfies both via Go structural typing. This keeps each module's dependency surface minimal.

@@ -6,4 +6,4 @@
 - [x] Task 4: Implement Discovery Logic
 - [x] Task 5: Update semcom_store Schema
 - [x] Task 6: Orchestrator Integration (Parallel Tokenization)
-- [ ] Task 7: Background Discovery Service
+- [x] Task 7: Background Discovery Service
