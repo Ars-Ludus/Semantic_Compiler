@@ -7,3 +7,9 @@
 - [x] Task 5: Update semcom_store Schema
 - [x] Task 6: Orchestrator Integration (Parallel Tokenization)
 - [x] Task 7: Background Discovery Service
+
+## Grounding Framework
+- [x] Task GND-1: Initialize GEMINI.md
+- [x] Task GND-2: Analyze and Create EDGES.md
+- [x] Task GND-3: Grounding Directory & Initial Grounding
+
