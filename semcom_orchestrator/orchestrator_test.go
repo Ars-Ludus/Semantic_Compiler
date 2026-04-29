@@ -97,13 +97,12 @@ func TestIngest(t *testing.T) {
 				t.Errorf("L0Count: got %d, want %d", result.L0Count, tt.wantL0)
 			}
 
-			// Verify that personal_tokens is NULL in the DB
 			mem, err := store.Get(context.Background(), result.MemoryID)
 			if err != nil {
 				t.Fatalf("Get: %v", err)
 			}
-			if mem.PersonalIDs != nil {
-				t.Errorf("expected personal_tokens to be NULL, got %v", mem.PersonalIDs)
+			if mem.Raw != tt.req.Text {
+				t.Errorf("Raw: got %q, want %q", mem.Raw, tt.req.Text)
 			}
 		})
 	}

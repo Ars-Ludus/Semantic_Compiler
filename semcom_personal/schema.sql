@@ -1,12 +1,13 @@
 CREATE TABLE IF NOT EXISTS personal_tokens (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,
     word  TEXT NOT NULL UNIQUE,
-    type  TEXT NOT NULL -- e.g., "PERSON", "PLACE", "EVENT"
+    type  TEXT NOT NULL -- e.g., "PERSON", "PLACE", "PROJECT", "ORGANIZATION", "TOPIC"
 );
 
-CREATE TABLE IF NOT EXISTS personal_semkeys (
-    personal_id INTEGER NOT NULL REFERENCES personal_tokens(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS memory_personal_tokens (
     memory_id   INTEGER NOT NULL,
-    PRIMARY KEY (personal_id, memory_id)
+    personal_id INTEGER NOT NULL,
+    PRIMARY KEY (memory_id, personal_id)
 );
-CREATE INDEX IF NOT EXISTS idx_personal_semkeys_val ON personal_semkeys(personal_id);
+
+CREATE INDEX IF NOT EXISTS idx_mpt_personal ON memory_personal_tokens (personal_id);

@@ -16,10 +16,12 @@ type chatRequest struct {
 	Benchmark string `json:"benchmark"` // "ignore" | "total" | "verbose"
 }
 
-type memoryHit struct {
-	MemoryID int64  `json:"memory_id"`
-	Score    int    `json:"score"`
-	Content  string `json:"content"`
+type contextHit struct {
+	Type    HitType `json:"type"`
+	ID      int32   `json:"id"`
+	Score   int     `json:"score"`
+	Topic   string  `json:"topic,omitempty"` // distilled only
+	Content string  `json:"content"`
 }
 
 // Pointer fields: nil means not reported. Avoids omitempty silencing a real zero.
@@ -31,7 +33,7 @@ type benchmarkResponse struct {
 }
 
 type chatResponse struct {
-	Memories  []memoryHit        `json:"memories,omitempty"`
+	Context   []contextHit       `json:"context,omitempty"`
 	Benchmark *benchmarkResponse `json:"benchmark,omitempty"`
 }
 
@@ -120,12 +122,12 @@ func (o *Orchestrator) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	resp := chatResponse{}
 
-	if len(result.Results) > 0 {
-		hits := make([]memoryHit, len(result.Results))
-		for i, r := range result.Results {
-			hits[i] = memoryHit{MemoryID: r.MemoryID, Score: r.Score, Content: r.Raw}
+	if len(result.Context) > 0 {
+		hits := make([]contextHit, len(result.Context))
+		for i, h := range result.Context {
+			hits[i] = contextHit{Type: h.Type, ID: h.ID, Score: h.Score, Topic: h.Topic, Content: h.Content}
 		}
-		resp.Memories = hits
+		resp.Context = hits
 	}
 
 	switch benchmarkMode {

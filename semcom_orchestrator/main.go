@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -32,9 +33,9 @@ func main() {
 	}
 
 	switch subcommand {
-	case "serve", "discover", "distill":
+	case "serve", "distill", "ingest-sessions":
 	default:
-		log.Fatalf("unknown subcommand %q; use: serve, discover, distill", subcommand)
+		log.Fatalf("unknown subcommand %q; use: serve, distill, ingest-sessions", subcommand)
 	}
 
 	idx, err := semindex.Load(indexPath)
@@ -63,11 +64,20 @@ func main() {
 		log.Fatalf("create personal matcher: %v", err)
 	}
 
-	retriever, err := semcomretrieve.Open(store, semcomretrieve.Options{AutoRefresh: true})
+	retriever, err := semcomretrieve.Open(store)
 	if err != nil {
 		log.Fatalf("open retriever: %v", err)
 	}
-	defer retriever.Close()
+
+	dRetriever, err := distill.NewDistillationRetriever(dStore)
+	if err != nil {
+		log.Fatalf("create distillation retriever: %v", err)
+	}
+
+	pRetriever, err := personal.NewPersonalRetriever(pStore)
+	if err != nil {
+		log.Fatalf("create personal retriever: %v", err)
+	}
 
 	maxTurn, err := store.MaxTurnID(context.Background())
 	if err != nil {
@@ -75,13 +85,15 @@ func main() {
 	}
 
 	orch := &Orchestrator{
-		embed:         idx,
-		personal:      pMatcher,
-		personalStore: pStore,
-		distillStore:  dStore,
-		thresholds:    semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},
-		store:         store,
-		retriever:     retriever,
+		embed:             idx,
+		personal:          pMatcher,
+		personalStore:     pStore,
+		personalRetriever: pRetriever,
+		distillStore:      dStore,
+		distillRetriever:  dRetriever,
+		thresholds:        semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},
+		store:             store,
+		retriever:         retriever,
 	}
 	orch.turnSeq.Store(maxTurn)
 
@@ -89,23 +101,21 @@ func main() {
 	defer stop()
 
 	switch subcommand {
-	case "discover":
-		client := newLLMClient()
-		if err := RunDiscoveryPass(ctx, orch, client); err != nil {
-			log.Fatalf("discovery: %v", err)
-		}
-		log.Println("discovery complete.")
-
 	case "distill":
 		client := newLLMClient()
-		log.Println("running discovery pass before distillation...")
-		if err := RunDiscoveryPass(ctx, orch, client); err != nil {
-			log.Fatalf("discovery: %v", err)
-		}
 		if err := RunDistillationPass(ctx, orch, client); err != nil {
 			log.Fatalf("distillation: %v", err)
 		}
 		log.Println("distillation complete.")
+
+	case "ingest-sessions":
+		defaultDir := os.ExpandEnv("$HOME/.openclaw/agents/main/sessions")
+		fs := flag.NewFlagSet("ingest-sessions", flag.ExitOnError)
+		sessionsDir := fs.String("sessions-dir", defaultDir, "path to openclaw sessions directory")
+		fs.Parse(os.Args[2:])
+		if err := RunIngestSessions(ctx, orch, *sessionsDir); err != nil {
+			log.Fatalf("ingest-sessions: %v", err)
+		}
 
 	case "serve":
 		mux := http.NewServeMux()
@@ -128,6 +138,10 @@ func main() {
 func openSharedDB(path string, schemas ...string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
 		return nil, err
 	}
 	for _, schema := range schemas {

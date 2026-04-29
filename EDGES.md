@@ -13,8 +13,8 @@ The primary bridge between isolated libraries.
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Global vocabulary filtering and vector queries.
 - **Personal Registry**: `semcom_orchestrator` -> `semcom_personal`
-  - File: `semcom_orchestrator/orchestrator.go`
-  - Usage: Token discovery and memory matching.
+  - File: `semcom_orchestrator/orchestrator.go`, `semcom_orchestrator/distillation.go`
+  - Usage: Personal token matching (Matcher), memory→token linking (Store.LinkMemory, memory_personal_tokens), and personal reverse index for retrieval (PersonalRetriever).
 - **Distillation**: `semcom_orchestrator` -> `semcom_distill`
   - File: `semcom_orchestrator/orchestrator.go`, `semcom_orchestrator/distillation.go`
   - Usage: Raw message processing.
@@ -33,7 +33,7 @@ Contextual data fetching services.
 ### Edges
 - **Retrieve-Store Dependency**: `semcom_retrieve` -> `semcom_store`
   - File: `semcom_retrieve/retriever.go`
-  - Usage: Retrieving contextual data directly from the memory store. (Note: This is a known isolation violation that will be refactored later).
+  - Usage: Full index build on open (`AllSemKeys`) and incremental refresh (`SemKeysSince`). This is a deliberate exception to the isolation rule — the retriever exists solely to index the store.
 
 ## Workspace Structure
 Managed via `go.work`.

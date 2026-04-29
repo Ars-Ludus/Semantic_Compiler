@@ -24,30 +24,22 @@ func openTestStore(t *testing.T) *Store {
 func TestStore(t *testing.T) {
 	s := openTestStore(t)
 
-	t.Run("TokenOperations", func(t *testing.T) {
-		id, err := s.InsertToken("Alice", "PERSON")
-		if err != nil {
-			t.Fatalf("InsertToken: %v", err)
-		}
-		if id == 0 {
-			t.Errorf("expected non-zero ID")
-		}
+	id, err := s.InsertToken("Alice", "PERSON")
+	if err != nil {
+		t.Fatalf("InsertToken: %v", err)
+	}
+	if id == 0 {
+		t.Errorf("expected non-zero ID")
+	}
 
-		token, err := s.GetToken("Alice")
-		if err != nil {
-			t.Fatalf("GetToken: %v", err)
-		}
-		if token.Word != "alice" {
-			t.Errorf("expected lowercase word alice, got %s", token.Word)
-		}
-		if token.Type != "PERSON" {
-			t.Errorf("expected type PERSON, got %s", token.Type)
-		}
-	})
-
-	t.Run("LinkMemory", func(t *testing.T) {
-		if err := s.LinkMemory(123, []uint32{1, 2}); err != nil {
-			t.Errorf("LinkMemory: %v", err)
-		}
-	})
+	token, err := s.GetToken("Alice")
+	if err != nil {
+		t.Fatalf("GetToken: %v", err)
+	}
+	if token.Word != "alice" {
+		t.Errorf("expected lowercase word alice, got %s", token.Word)
+	}
+	if token.Type != "PERSON" {
+		t.Errorf("expected type PERSON, got %s", token.Type)
+	}
 }

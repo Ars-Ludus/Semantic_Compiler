@@ -4,8 +4,6 @@ CREATE TABLE IF NOT EXISTS memories (
     summary_id  INTEGER,
     source      TEXT    NOT NULL CHECK(source IN ('user', 'model')),
     raw_message TEXT    NOT NULL,
-    personal_tokens TEXT,
-    discovered  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL
                 DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

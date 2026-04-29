@@ -10,9 +10,16 @@ type LLMClient interface {
 	GenerateJSON(ctx context.Context, prompt string, target interface{}) error
 }
 
+// Entity is a named entity extracted from a conversation chunk.
+type Entity struct {
+	Text string `json:"text"`
+	Type string `json:"type"` // "PERSON", "PLACE", "PROJECT", "ORGANIZATION", "TOPIC"
+}
+
 // DistillationResponse is the structured output from the LLM distillation call.
 type DistillationResponse struct {
 	Distillations []DistilledSnippet `json:"distillations"`
+	Entities      []Entity           `json:"entities"`
 }
 
 // DistilledSnippet is a single topic/knowledge pair extracted from a conversation chunk.
@@ -21,23 +28,25 @@ type DistilledSnippet struct {
 	Snippet string `json:"snippet"`
 }
 
-// Distill sends a conversation chunk to the LLM and returns compressed knowledge snippets.
+// Distill sends a conversation chunk to the LLM and returns compressed knowledge
+// snippets and named entities in a single call.
 func Distill(ctx context.Context, client LLMClient, conversation string) (*DistillationResponse, error) {
 	if conversation == "" {
 		return &DistillationResponse{}, nil
 	}
 
-	prompt := fmt.Sprintf(`Extract and distill key personal knowledge snippets from the following conversation chunk.
+	prompt := fmt.Sprintf(`Analyze the following conversation chunk and extract two things:
 
-Focus on information that is NOT expected to exist within your general training data (e.g., personal preferences, specific project details, unique relationships, or facts about specific people).
+1. Knowledge distillations: compressed topic/snippet pairs capturing personal, project-specific, or contextual knowledge that would NOT be found in generic training data (e.g. personal preferences, specific project details, unique relationships, domain-specific facts about named people or organizations).
 
-For each distinct topic or subject, produce a concise, high-density snippet of the knowledge learned.
+2. Named entities: specific proper names that appear in the conversation — people, places, projects, organizations, or domain-specific terms unique to this person's context. Do NOT include generic concepts (e.g. "database", "meeting", "issue").
 
 Conversation:
 %s
 
 Return a JSON object with:
-- "distillations": an array of objects with "topic" and "snippet".
+- "distillations": array of {"topic": string, "snippet": string}
+- "entities": array of {"text": string, "type": "PERSON"|"PLACE"|"PROJECT"|"ORGANIZATION"|"TOPIC"}
 `, conversation)
 
 	var resp DistillationResponse

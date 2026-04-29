@@ -2,10 +2,8 @@ package semcomretrieve
 
 import (
 	"context"
-	"log"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	semanticstore "github.com/ars/semantic_store"
@@ -13,16 +11,8 @@ import (
 
 // Result is a single ranked match.
 type Result struct {
-	MemoryID int64
+	MemoryID int32
 	Score    int // count of shared l0_ids with query
-}
-
-// Options configures a Retriever.
-type Options struct {
-	// AutoRefresh enables a background goroutine that calls Refresh on Interval.
-	// If false, the caller must invoke Refresh explicitly after inserts.
-	AutoRefresh bool
-	Interval    time.Duration // default 50ms when AutoRefresh=true and zero
 }
 
 // Retriever holds the in-memory reverse index over memory semkeys.
@@ -31,22 +21,14 @@ type Retriever struct {
 	store  semanticstore.Store
 	mu     sync.RWMutex
 	index  map[uint32]*roaring.Bitmap // l0_id → set of memory_ids
-	lastID int64
-	opts   Options
-	stop   chan struct{} // nil when AutoRefresh=false
+	lastID int32
 }
 
-// Open builds an initial full index from store, then optionally starts
-// a background refresh goroutine.
-func Open(store semanticstore.Store, opts Options) (*Retriever, error) {
-	if opts.AutoRefresh && opts.Interval == 0 {
-		opts.Interval = 50 * time.Millisecond
-	}
-
+// Open builds an initial full index from store.
+func Open(store semanticstore.Store) (*Retriever, error) {
 	r := &Retriever{
 		store: store,
 		index: make(map[uint32]*roaring.Bitmap),
-		opts:  opts,
 	}
 
 	rows, err := store.AllSemKeys(context.Background())
@@ -63,11 +45,6 @@ func Open(store semanticstore.Store, opts Options) (*Retriever, error) {
 		if row.MemoryID > r.lastID {
 			r.lastID = row.MemoryID
 		}
-	}
-
-	if opts.AutoRefresh {
-		r.stop = make(chan struct{})
-		go r.autoRefresh()
 	}
 
 	return r, nil
@@ -97,21 +74,6 @@ func (r *Retriever) Refresh(ctx context.Context) error {
 	return nil
 }
 
-func (r *Retriever) autoRefresh() {
-	ticker := time.NewTicker(r.opts.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if err := r.Refresh(context.Background()); err != nil {
-				log.Printf("semcom_retrieve: refresh: %v", err)
-			}
-		case <-r.stop:
-			return
-		}
-	}
-}
-
 // Query scores all indexed memories against queryL0IDs and returns the top-k
 // results sorted descending by score. Pass k=0 to return all matches.
 func (r *Retriever) Query(queryL0IDs []uint32, k int) []Result {
@@ -136,7 +98,7 @@ func (r *Retriever) Query(queryL0IDs []uint32, k int) []Result {
 
 	results := make([]Result, 0, len(scores))
 	for memID, score := range scores {
-		results = append(results, Result{MemoryID: int64(memID), Score: int(score)})
+		results = append(results, Result{MemoryID: int32(memID), Score: int(score)}) //nolint:gosec
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
@@ -145,11 +107,4 @@ func (r *Retriever) Query(queryL0IDs []uint32, k int) []Result {
 		results = results[:k]
 	}
 	return results
-}
-
-// Close stops the background refresh goroutine if running.
-func (r *Retriever) Close() {
-	if r.stop != nil {
-		close(r.stop)
-	}
 }

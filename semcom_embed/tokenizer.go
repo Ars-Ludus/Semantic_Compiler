@@ -9,16 +9,31 @@ import (
 
 // tokenize splits text into lowercase words and returns a bitmap of all
 // token_ids found in the index word map, plus a list of unknown words.
+// Multi-word phrases in the vocabulary are matched greedily: at each position
+// the longest matching phrase wins before falling back to a single-word lookup.
 func tokenize(text string, words map[string]int32) (*roaring.Bitmap, []string) {
+	tokens := SplitWords(text)
 	bm := roaring.New()
 	var oov []string
-	for _, word := range SplitWords(text) {
-		if id, ok := words[word]; ok {
-			bm.Add(uint32(id))
-		} else {
-			oov = append(oov, word)
+
+	for i := 0; i < len(tokens); {
+		// Try longest match first, shrinking the window down to 1.
+		matched := false
+		for end := len(tokens); end > i; end-- {
+			phrase := strings.Join(tokens[i:end], " ")
+			if id, ok := words[phrase]; ok {
+				bm.Add(uint32(id))
+				i = end
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			oov = append(oov, tokens[i])
+			i++
 		}
 	}
+
 	return bm, oov
 }
 

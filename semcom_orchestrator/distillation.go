@@ -2,15 +2,17 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 
 	distill "semcom_distill"
+	semindex "semcom_embed"
 )
 
-// RunDistillationPass extracts knowledge snippets from conversation chunks.
+// RunDistillationPass extracts knowledge snippets and personal entities from conversation chunks.
 func RunDistillationPass(ctx context.Context, o *Orchestrator, llm distill.LLMClient) error {
 	log.Println("starting distillation pass...")
 
@@ -18,9 +20,10 @@ func RunDistillationPass(ctx context.Context, o *Orchestrator, llm distill.LLMCl
 	if err != nil {
 		return fmt.Errorf("get metadata: %w", err)
 	}
-	lastID, _ := strconv.ParseInt(lastIDStr, 10, 64)
+	lastID64, _ := strconv.ParseInt(lastIDStr, 10, 64)
+	lastID := int32(lastID64)
 
-	maxID, err := o.store.MaxTurnID(ctx)
+	maxID, err := o.store.MaxID(ctx)
 	if err != nil {
 		return fmt.Errorf("get max id: %w", err)
 	}
@@ -56,6 +59,7 @@ func RunDistillationPass(ctx context.Context, o *Orchestrator, llm distill.LLMCl
 			continue
 		}
 
+		// Process distillations.
 		for _, snippet := range resp.Distillations {
 			stats := o.embed.Query(snippet.Snippet, o.thresholds)
 
@@ -77,11 +81,56 @@ func RunDistillationPass(ctx context.Context, o *Orchestrator, llm distill.LLMCl
 				log.Printf("insert distillation: %v", err)
 				continue
 			}
+			o.distillRetriever.Add(id, semKeys, personalIDs)
 			log.Printf("stored distillation %d: topic=%q", id, snippet.Topic)
 		}
 
+		// Process entities: upsert personal tokens for chunk-level named entities.
+		for _, entity := range resp.Entities {
+			// OOV filter: skip entities fully covered by the global vocabulary —
+			// their semkeys already handle retrieval without a personal token.
+			stats := o.embed.Query(entity.Text, o.thresholds)
+			if len(stats.OOVWords) == 0 {
+				continue
+			}
+
+			token, err := o.personalStore.GetToken(entity.Text)
+			if err == nil {
+				_ = token // already registered
+				continue
+			}
+			if err != sql.ErrNoRows {
+				log.Printf("lookup token %q: %v", entity.Text, err)
+				continue
+			}
+
+			id, err := o.personalStore.InsertToken(entity.Text, entity.Type)
+			if err != nil {
+				log.Printf("insert token %q: %v", entity.Text, err)
+				continue
+			}
+			o.personal.AddToken(entity.Text, id)
+			log.Printf("learned entity: %s type=%s (id=%d)", entity.Text, entity.Type, id)
+		}
+
+		// Link each memory in the chunk to any matching personal tokens.
+		for _, m := range memories {
+			words := semindex.SplitWords(m.Raw)
+			personalIDs, _ := o.personal.Match(words)
+			if len(personalIDs) == 0 {
+				continue
+			}
+			if err := o.personalStore.LinkMemory(m.ID, personalIDs); err != nil {
+				log.Printf("link memory %d: %v", m.ID, err)
+				continue
+			}
+			for _, pid := range personalIDs {
+				o.personalRetriever.AddLink(pid, m.ID)
+			}
+		}
+
 		lastID = end
-		if err := o.distillStore.SetMetadata("last_distilled_id", strconv.FormatInt(lastID, 10)); err != nil {
+		if err := o.distillStore.SetMetadata("last_distilled_id", strconv.FormatInt(int64(lastID), 10)); err != nil {
 			return fmt.Errorf("set metadata: %w", err)
 		}
 	}

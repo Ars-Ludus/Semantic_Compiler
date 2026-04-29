@@ -24,21 +24,32 @@ func NewMatcher(s *Store) (*Matcher, error) {
 	}, nil
 }
 
-// Match takes a list of words and returns the IDs of matching tokens
-// and the list of words that were not found in the token registry.
+// Match performs a longest-match forward scan over words against the token
+// registry. Multi-word phrases registered as single tokens are preferred over
+// their constituent words. Returns matched token IDs and unmatched words.
 func (m *Matcher) Match(words []string) (hits []uint32, unmapped []string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	hits = make([]uint32, 0, len(words))
-	unmapped = make([]string, 0, len(words))
+	lower := make([]string, len(words))
+	for i, w := range words {
+		lower[i] = strings.ToLower(w)
+	}
 
-	for _, word := range words {
-		word = strings.ToLower(word)
-		if id, ok := m.tokens[word]; ok {
-			hits = append(hits, id)
-		} else {
-			unmapped = append(unmapped, word)
+	for i := 0; i < len(lower); {
+		matched := false
+		for end := len(lower); end > i; end-- {
+			phrase := strings.Join(lower[i:end], " ")
+			if id, ok := m.tokens[phrase]; ok {
+				hits = append(hits, id)
+				i = end
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			unmapped = append(unmapped, lower[i])
+			i++
 		}
 	}
 	return hits, unmapped

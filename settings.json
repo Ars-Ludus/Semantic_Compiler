@@ -1,0 +1,7 @@
+{
+  "total_budget": 100,
+  "cost_knowledge_node": 10,
+  "cost_distilled_snippet": 15,
+  "cost_raw_memory": 20,
+  "l0_gap_threshold": 5
+}

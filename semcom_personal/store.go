@@ -5,13 +5,12 @@ import (
 	"strings"
 )
 
-// Store persists personal tokens and their memory associations.
+// Store persists personal tokens.
 // It operates on a *sql.DB provided by the caller — no lifecycle ownership.
 type Store struct {
 	db *sql.DB
 }
 
-// NewStore wraps an existing database connection.
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
@@ -39,6 +38,53 @@ func (s *Store) GetToken(word string) (*Token, error) {
 	return &t, nil
 }
 
+// MemoryLink is a single row from memory_personal_tokens.
+type MemoryLink struct {
+	MemoryID   int32
+	PersonalID uint32
+}
+
+// LinkMemory records that a memory matched a set of personal tokens.
+func (s *Store) LinkMemory(memoryID int32, personalIDs []uint32) error {
+	if len(personalIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO memory_personal_tokens (memory_id, personal_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, pid := range personalIDs {
+		if _, err := stmt.Exec(memoryID, pid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetAllLinks loads all memory→personal token associations for retriever initialization.
+func (s *Store) GetAllLinks() ([]MemoryLink, error) {
+	rows, err := s.db.Query(`SELECT memory_id, personal_id FROM memory_personal_tokens`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var links []MemoryLink
+	for rows.Next() {
+		var l MemoryLink
+		if err := rows.Scan(&l.MemoryID, &l.PersonalID); err != nil {
+			return nil, err
+		}
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
 func (s *Store) GetAllTokens() (map[string]uint32, error) {
 	rows, err := s.db.Query(`SELECT word, id FROM personal_tokens`)
 	if err != nil {
@@ -56,22 +102,4 @@ func (s *Store) GetAllTokens() (map[string]uint32, error) {
 		tokens[strings.ToLower(word)] = id
 	}
 	return tokens, nil
-}
-
-func (s *Store) LinkMemory(memoryID int64, personalIDs []uint32) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	for _, pid := range personalIDs {
-		if _, err := tx.Exec(
-			`INSERT OR IGNORE INTO personal_semkeys (personal_id, memory_id) VALUES (?, ?)`,
-			pid, memoryID,
-		); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }

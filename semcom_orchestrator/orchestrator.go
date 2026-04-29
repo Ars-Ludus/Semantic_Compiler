@@ -12,6 +12,7 @@ import (
 	personal "semcom_personal"
 )
 
+
 // Embedder wraps Index.Query for testability.
 type Embedder interface {
 	Query(text string, th semindex.Thresholds) semindex.QueryStats
@@ -25,14 +26,16 @@ type PersonalMatcher interface {
 
 // Orchestrator wires semcom_embed, semcom_store, and semcom_retrieve into pipelines.
 type Orchestrator struct {
-	embed         Embedder
-	personal      PersonalMatcher
-	personalStore *personal.Store
-	distillStore  *distill.Store
-	thresholds    semindex.Thresholds
-	store         semanticstore.Store
-	retriever     *semcomretrieve.Retriever
-	turnSeq       atomic.Int64 // monotonically increasing; seeded from DB at startup
+	embed              Embedder
+	personal           PersonalMatcher
+	personalStore      *personal.Store
+	personalRetriever  *personal.PersonalRetriever
+	distillStore       *distill.Store
+	distillRetriever   *distill.DistillationRetriever
+	thresholds         semindex.Thresholds
+	store              semanticstore.Store
+	retriever          *semcomretrieve.Retriever
+	turnSeq            atomic.Int32 // monotonically increasing; seeded from DB at startup
 }
 
 // IngestRequest is the input to the Ingest pipeline.
@@ -43,47 +46,79 @@ type IngestRequest struct {
 
 // IngestResult is returned after a successful Ingest.
 type IngestResult struct {
-	MemoryID    int64
+	MemoryID    int32
 	L0Count     int
 	QueryTokens int
 	EmbedUs     int64
 	StoreUs     int64
 }
 
-// Ingest embeds the text, then stores the result in semcom_store.
+// Ingest embeds the text and matches personal tokens concurrently, then stores the result.
 func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestResult, error) {
-	t0 := time.Now()
-	stats := o.embed.Query(req.Text, o.thresholds)
-	embedUs := time.Since(t0).Microseconds()
-
-	globalKeys := make([]uint32, 0, len(stats.L0IDs))
-	seen := make(map[uint32]struct{})
-	for _, id := range stats.L0IDs {
-		u := uint32(id)
-		if _, ok := seen[u]; !ok {
-			globalKeys = append(globalKeys, u)
-			seen[u] = struct{}{}
-		}
+	type embedOut struct {
+		keys        []uint32
+		queryTokens int
+		us          int64
 	}
+	embedCh := make(chan embedOut, 1)
+	personalCh := make(chan []uint32, 1)
+
+	t0 := time.Now()
+	go func() {
+		stats := o.embed.Query(req.Text, o.thresholds)
+		keys := make([]uint32, 0, len(stats.L0IDs))
+		seen := make(map[uint32]struct{})
+		for _, id := range stats.L0IDs {
+			u := uint32(id)
+			if _, ok := seen[u]; !ok {
+				keys = append(keys, u)
+				seen[u] = struct{}{}
+			}
+		}
+		embedCh <- embedOut{keys, stats.QueryTokens, time.Since(t0).Microseconds()}
+	}()
+
+	go func() {
+		words := semindex.SplitWords(req.Text)
+		ids, _ := o.personal.Match(words)
+		personalCh <- ids
+	}()
+
+	emb := <-embedCh
+	personalIDs := <-personalCh
 
 	t1 := time.Now()
-	// personal_tokens column is left NULL (represented by nil PersonalIDs in Memory struct)
 	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
 		TurnID: o.turnSeq.Add(1),
 		Source: req.Source,
 		Raw:    req.Text,
-		SemKey: globalKeys,
+		SemKey: emb.keys,
 	})
 	if err != nil {
 		return IngestResult{}, err
 	}
 	storeUs := time.Since(t1).Microseconds()
 
+	if len(personalIDs) > 0 && o.personalRetriever != nil {
+		if err := o.personalStore.LinkMemory(memoryID, personalIDs); err != nil {
+			return IngestResult{}, err
+		}
+		for _, pid := range personalIDs {
+			o.personalRetriever.AddLink(pid, memoryID)
+		}
+	}
+
+	if o.retriever != nil {
+		if err := o.retriever.Refresh(ctx); err != nil {
+			return IngestResult{}, err
+		}
+	}
+
 	return IngestResult{
 		MemoryID:    memoryID,
-		L0Count:     len(globalKeys),
-		QueryTokens: stats.QueryTokens,
-		EmbedUs:     embedUs,
+		L0Count:     len(emb.keys),
+		QueryTokens: emb.queryTokens,
+		EmbedUs:     emb.us,
 		StoreUs:     storeUs,
 	}, nil
 }
@@ -111,70 +146,90 @@ type ChatBenchmark struct {
 	TotalUs    int64
 }
 
-// MemoryHit is a single retrieved memory with its content and score.
-type MemoryHit struct {
-	MemoryID int64
-	Score    int
-	Raw      string
-}
-
 // ChatResult is returned by Chat.
 type ChatResult struct {
-	Results   []MemoryHit
-	MemoryID  int64
+	Context   []RetrievalHit
+	MemoryID  int32
 	Benchmark ChatBenchmark
 }
 
-// Chat embeds the prompt once, retrieves relevant past memories, then stores the
-// prompt. Retrieve runs before Insert to avoid self-contamination.
+// Chat runs global embedding and personal token matching concurrently, performs
+// tiered retrieval, then stores the prompt. Retrieval runs before Insert to
+// avoid self-contamination.
 func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) {
-	t0 := time.Now()
-	stats := o.embed.Query(req.Prompt, o.thresholds)
-	embedUs := time.Since(t0).Microseconds()
-
-	globalKeys := make([]uint32, 0, len(stats.L0IDs))
-	seen := make(map[uint32]struct{})
-	for _, id := range stats.L0IDs {
-		u := uint32(id)
-		if _, ok := seen[u]; !ok {
-			globalKeys = append(globalKeys, u)
-			seen[u] = struct{}{}
-		}
+	type embedOut struct {
+		keys []uint32
+		us   int64
 	}
+	embedCh := make(chan embedOut, 1)
+	personalCh := make(chan []uint32, 1)
+
+	t0 := time.Now()
+	go func() {
+		stats := o.embed.Query(req.Prompt, o.thresholds)
+		keys := make([]uint32, 0, len(stats.L0IDs))
+		seen := make(map[uint32]struct{})
+		for _, id := range stats.L0IDs {
+			u := uint32(id)
+			if _, ok := seen[u]; !ok {
+				keys = append(keys, u)
+				seen[u] = struct{}{}
+			}
+		}
+		embedCh <- embedOut{keys, time.Since(t0).Microseconds()}
+	}()
+
+	go func() {
+		words := semindex.SplitWords(req.Prompt)
+		ids, _ := o.personal.Match(words)
+		personalCh <- ids
+	}()
+
+	emb := <-embedCh
+	personalIDs := <-personalCh
 
 	t1 := time.Now()
-	retrieved := o.retriever.Query(globalKeys, req.TopK)
-	retrieveUs := time.Since(t1).Microseconds()
-
-	hits := make([]MemoryHit, 0, len(retrieved))
-	for _, r := range retrieved {
-		raw, err := o.store.GetRaw(ctx, r.MemoryID)
-		if err != nil {
-			return ChatResult{}, err
-		}
-		hits = append(hits, MemoryHit{MemoryID: r.MemoryID, Score: r.Score, Raw: raw})
+	ctxHits, err := o.tieredRetrieve(ctx, emb.keys, personalIDs)
+	if err != nil {
+		return ChatResult{}, err
 	}
+	retrieveUs := time.Since(t1).Microseconds()
 
 	t2 := time.Now()
 	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
 		TurnID: o.turnSeq.Add(1),
 		Source: req.By,
 		Raw:    req.Prompt,
-		SemKey: globalKeys,
+		SemKey: emb.keys,
 	})
 	if err != nil {
 		return ChatResult{}, err
 	}
 	storeUs := time.Since(t2).Microseconds()
 
+	if len(personalIDs) > 0 && o.personalRetriever != nil {
+		if err := o.personalStore.LinkMemory(memoryID, personalIDs); err != nil {
+			return ChatResult{}, err
+		}
+		for _, pid := range personalIDs {
+			o.personalRetriever.AddLink(pid, memoryID)
+		}
+	}
+
+	if o.retriever != nil {
+		if err := o.retriever.Refresh(ctx); err != nil {
+			return ChatResult{}, err
+		}
+	}
+
 	return ChatResult{
-		Results:  hits,
+		Context:  ctxHits,
 		MemoryID: memoryID,
 		Benchmark: ChatBenchmark{
-			EmbedUs:    embedUs,
+			EmbedUs:    emb.us,
 			RetrieveUs: retrieveUs,
 			StoreUs:    storeUs,
-			TotalUs:    embedUs + retrieveUs + storeUs,
+			TotalUs:    emb.us + retrieveUs + storeUs,
 		},
 	}, nil
 }

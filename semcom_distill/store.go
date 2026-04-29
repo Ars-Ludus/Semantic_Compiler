@@ -1,9 +1,11 @@
 package distill
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"strings"
 )
 
 //go:embed schema.sql
@@ -17,7 +19,7 @@ type Store struct {
 
 // Distillation is a compressed knowledge snippet extracted from a conversation chunk.
 type Distillation struct {
-	ID          int64
+	ID          int32
 	Topic       string
 	Snippet     string
 	PersonalIDs []uint32
@@ -30,7 +32,7 @@ func NewStore(db *sql.DB) *Store {
 }
 
 // InsertDistillation stores a distillation and its semkey associations atomically.
-func (s *Store) InsertDistillation(d *Distillation) (int64, error) {
+func (s *Store) InsertDistillation(d *Distillation) (int32, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -49,10 +51,11 @@ func (s *Store) InsertDistillation(d *Distillation) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	id, err := res.LastInsertId()
+	id64, err := res.LastInsertId()
 	if err != nil {
 		return 0, err
 	}
+	id := int32(id64) //nolint:gosec // IDs stay well within int32 range
 
 	for _, sk := range d.SemKeys {
 		if _, err := tx.Exec(
@@ -64,6 +67,85 @@ func (s *Store) InsertDistillation(d *Distillation) (int64, error) {
 	}
 
 	return id, tx.Commit()
+}
+
+// GetDistillationsByIDs returns the topic and snippet for each requested ID.
+// Used by the budget fill step to fetch text for top-scored candidates.
+func (s *Store) GetDistillationsByIDs(ctx context.Context, ids []int32) ([]*Distillation, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, topic, snippet FROM distillations WHERE id IN ("+
+			strings.Join(placeholders, ",")+")",
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Distillation
+	for rows.Next() {
+		d := &Distillation{}
+		if err := rows.Scan(&d.ID, &d.Topic, &d.Snippet); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// AllDistillations returns every distillation with its semkeys and personal IDs populated.
+func (s *Store) AllDistillations(ctx context.Context) ([]*Distillation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, topic, snippet, personal_tokens FROM distillations ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []*Distillation
+	index := make(map[int32]int)
+	for rows.Next() {
+		d := &Distillation{}
+		var pJSON sql.NullString
+		if err := rows.Scan(&d.ID, &d.Topic, &d.Snippet, &pJSON); err != nil {
+			return nil, err
+		}
+		if pJSON.Valid && pJSON.String != "" && pJSON.String != "null" {
+			json.Unmarshal([]byte(pJSON.String), &d.PersonalIDs)
+		}
+		index[d.ID] = len(all)
+		all = append(all, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	skRows, err := s.db.QueryContext(ctx,
+		`SELECT distillation_id, semkey_value FROM distillation_semkeys`)
+	if err != nil {
+		return nil, err
+	}
+	defer skRows.Close()
+
+	for skRows.Next() {
+		var dID int32
+		var sk uint32
+		if err := skRows.Scan(&dID, &sk); err != nil {
+			return nil, err
+		}
+		if i, ok := index[dID]; ok {
+			all[i].SemKeys = append(all[i].SemKeys, sk)
+		}
+	}
+	return all, skRows.Err()
 }
 
 // GetMetadata returns the value for key, or "" if not set.
