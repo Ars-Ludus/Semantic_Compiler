@@ -5,10 +5,18 @@ Interface reference for all pipeline components. All components are in-process G
 > For a plain-language description of each pipeline and its correct step order, see [`LOOPS.md`](./LOOPS.md).
 
 ```
-POST /chat
+POST /chat  (any harness)
      │
      ▼
-[semcom_orchestrator]
+[semcom_adapter.NewHandler]
+     │  Harness.Decode → CanonicalRequest → validate → Dispatcher
+     │
+     ▼
+[semcom_orchestrator dispatcher closure]  — in main.go
+     │  maps CanonicalRequest → IngestRequest / ChatRequest
+     │
+     ▼
+[semcom_orchestrator.Orchestrator]
      │
      ├─ semcom_embed.Index.Query()              — global semantic fingerprint (L0 IDs)
      ├─ semcom_personal.Matcher.Match()         — personal token IDs (concurrent with embed)
@@ -17,6 +25,15 @@ POST /chat
      ├─ semcom_distill.DistillationRetriever    — distillation reverse index (l0+personal → distillation_ids)
      ├─ semcom_store.Store                      — memory persistence (memory.db)
      └─ semcom_personal.Store + semcom_distill.Store  — personalization persistence (personal.db)
+```
+
+### HTTP entry point: `semcom_adapter`
+
+`adapter.NewHandler(harness, dispatcher)` returns the `http.HandlerFunc` registered at `/chat`. It owns method checking, body reading, harness decode, validation, dispatch, and harness encode. The orchestrator never implements `http.Handler` directly.
+
+To add a new harness, implement `adapter.Harness` in a new sub-package (e.g. `semcom_adapter/claudecode`) and register a second route in `main.go`:
+```go
+mux.Handle("/hooks/claude", adapter.NewHandler(claudecode.Harness{}, dispatcher))
 ```
 
 ## Structural Note: Global and Personal Tagging Are Parallel

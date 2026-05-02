@@ -4,6 +4,7 @@ use (
 	../providertron
 	./dashboard
 	./internal
+	./semcom_adapter
 	./semcom_distill
 	./semcom_embed
 	./semcom_llm

@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
+	adapter "semcom_adapter"
+	"semcom_adapter/openclaw"
 	distill "semcom_distill"
 	semindex "semcom_embed"
 	llmclient "semcom_llm"
@@ -22,9 +25,15 @@ import (
 )
 
 func main() {
-	indexPath := seminternal.EnvOr("INDEX_PATH", "index.bin")
-	dbPath := seminternal.EnvOr("DB_PATH", "memory.db")
-	personalDBPath := seminternal.EnvOr("PERSONAL_DB_PATH", "personal.db")
+	exe, err := os.Executable()
+	if err != nil {
+		log.Fatalf("resolve executable path: %v", err)
+	}
+	exeDir := filepath.Dir(exe)
+
+	indexPath := seminternal.EnvOr("INDEX_PATH", filepath.Join(exeDir, "index.bin"))
+	dbPath := seminternal.EnvOr("DB_PATH", filepath.Join(exeDir, "memory.db"))
+	personalDBPath := seminternal.EnvOr("PERSONAL_DB_PATH", filepath.Join(exeDir, "personal.db"))
 	port := seminternal.EnvOr("PORT", "8080")
 
 	subcommand := "serve"
@@ -118,8 +127,68 @@ func main() {
 		}
 
 	case "serve":
+		dispatcher := func(ctx context.Context, req adapter.CanonicalRequest) (adapter.CanonicalResponse, error) {
+			if req.Op == adapter.OpIngest {
+				result, err := orch.Ingest(ctx, IngestRequest{
+					Text:   req.Prompt,
+					Source: semanticstore.Source(req.By),
+				})
+				if err != nil {
+					return adapter.CanonicalResponse{}, err
+				}
+				resp := adapter.CanonicalResponse{}
+				totalUs := result.EmbedUs + result.StoreUs
+				switch req.Benchmark {
+				case "total":
+					resp.Benchmark = &adapter.Benchmark{TotalUs: totalUs}
+				case "verbose":
+					resp.Benchmark = &adapter.Benchmark{
+						EmbedUs: &result.EmbedUs,
+						StoreUs: &result.StoreUs,
+						TotalUs: totalUs,
+					}
+				}
+				return resp, nil
+			}
+
+			result, err := orch.Chat(ctx, ChatRequest{
+				Prompt: req.Prompt,
+				By:     semanticstore.Source(req.By),
+				TopK:   req.TopK,
+			})
+			if err != nil {
+				return adapter.CanonicalResponse{}, err
+			}
+			resp := adapter.CanonicalResponse{}
+			if len(result.Context) > 0 {
+				hits := make([]adapter.ContextHit, len(result.Context))
+				for i, h := range result.Context {
+					hits[i] = adapter.ContextHit{
+						Type:    adapter.HitType(h.Type),
+						ID:      h.ID,
+						Score:   h.Score,
+						Topic:   h.Topic,
+						Content: h.Content,
+					}
+				}
+				resp.Context = hits
+			}
+			switch req.Benchmark {
+			case "total":
+				resp.Benchmark = &adapter.Benchmark{TotalUs: result.Benchmark.TotalUs}
+			case "verbose":
+				resp.Benchmark = &adapter.Benchmark{
+					EmbedUs:    &result.Benchmark.EmbedUs,
+					RetrieveUs: &result.Benchmark.RetrieveUs,
+					StoreUs:    &result.Benchmark.StoreUs,
+					TotalUs:    result.Benchmark.TotalUs,
+				}
+			}
+			return resp, nil
+		}
+
 		mux := http.NewServeMux()
-		mux.HandleFunc("/chat", orch.handleChat)
+		mux.Handle("/chat", adapter.NewHandler(openclaw.Harness{}, dispatcher))
 
 		srv := &http.Server{Addr: ":" + port, Handler: mux}
 		go func() {
@@ -158,7 +227,7 @@ func newLLMClient() *llmclient.Client {
 	if apiKey == "" {
 		log.Fatal("GOOGLE_API_KEY or GEMINI_API_KEY required for LLM passes")
 	}
-	model := seminternal.EnvOr("GEMINI_MODEL", "gemini-2.5-flash-preview-04-17")
+	model := seminternal.EnvOr("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 	client, err := llmclient.New(apiKey, model)
 	if err != nil {
 		log.Fatalf("create llm client: %v", err)

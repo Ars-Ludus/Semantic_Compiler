@@ -24,6 +24,9 @@ The primary bridge between isolated libraries.
 - **LLM Integration**: `semcom_orchestrator` -> `semcom_llm`
   - File: `semcom_orchestrator/main.go`
   - Usage: Providing LLM capability to personal discovery and distillation.
+- **Adapter**: `semcom_orchestrator` -> `semcom_adapter`
+  - File: `semcom_orchestrator/main.go`
+  - Usage: HTTP handler construction. The orchestrator provides a `Dispatcher` closure to `adapter.NewHandler`; the adapter owns request decoding, validation, and response encoding. The openClaw harness (`semcom_adapter/openclaw`) translates the openClaw Plugin SDK wire format.
 
 > For deeper technical details on orchestrator components, see `semcom_orchestrator/COMPONENTS.md`.
 
@@ -37,6 +40,7 @@ Contextual data fetching services.
 
 ## Workspace Structure
 Managed via `go.work`.
+- `/semcom_adapter`: Harness translation layer (canonical types + per-harness adapters).
 - `/semcom_embed`: Core vector indexer.
 - `/semcom_store`: SQLite-backed memory store.
 - `/semcom_personal`: Personal token registry.
