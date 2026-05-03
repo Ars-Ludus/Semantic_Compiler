@@ -135,7 +135,30 @@ else
   echo "    SKIP: ~/.openclaw not found — hooks and plugin not installed"
 fi
 
-# --- 4. Smoke test ---
+# --- 4. Platform integrations (Claude Code) ---
+CC_HOOK_SRC="$SCRIPT_DIR/semcom_adapter/claudecode/hooks"
+CC_HOOK_DST="$SEMCOM_DIR/hooks/claude-code"
+
+if [ -d "$HOME/.claude" ] && [ -d "$CC_HOOK_SRC" ]; then
+  echo "==> Installing Claude Code hooks..."
+  mkdir -p "$CC_HOOK_DST"
+  cp "$CC_HOOK_SRC/user-prompt-submit.sh" "$CC_HOOK_DST/user-prompt-submit.sh"
+  cp "$CC_HOOK_SRC/stop.sh"               "$CC_HOOK_DST/stop.sh"
+  chmod +x "$CC_HOOK_DST/user-prompt-submit.sh" "$CC_HOOK_DST/stop.sh"
+  echo "    OK: hook scripts installed to $CC_HOOK_DST"
+  echo ""
+  echo "    Add the following to ~/.claude/settings.json (merge with existing hooks if present):"
+  echo '    {'
+  echo '      "hooks": {'
+  echo '        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "'"$CC_HOOK_DST"'/user-prompt-submit.sh"}]}],'
+  echo '        "Stop":             [{"hooks": [{"type": "command", "command": "'"$CC_HOOK_DST"'/stop.sh"}]}]'
+  echo '      }'
+  echo '    }'
+else
+  echo "    SKIP: ~/.claude not found — Claude Code hooks not installed"
+fi
+
+# --- 5. Smoke test ---
 echo "==> Smoke test..."
 sleep 1
 if curl -sf -X POST "http://localhost:$SEMCOM_PORT/chat" \

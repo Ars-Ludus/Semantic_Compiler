@@ -27,6 +27,7 @@ tar czf "$OUT" \
   semcom_embed/index.bin \
   docs/openclaw/semcom-start \
   docs/openclaw/semcom-plugin \
+  semcom_adapter/claudecode/hooks \
   install.sh
 echo "    OK: $OUT ($(ls -lh "$OUT" | awk '{print $5}'))"
 

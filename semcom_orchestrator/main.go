@@ -14,6 +14,7 @@ import (
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	adapter "semcom_adapter"
+	"semcom_adapter/claudecode"
 	"semcom_adapter/openclaw"
 	distill "semcom_distill"
 	semindex "semcom_embed"
@@ -189,6 +190,7 @@ func main() {
 
 		mux := http.NewServeMux()
 		mux.Handle("/chat", adapter.NewHandler(openclaw.Harness{}, dispatcher))
+		mux.Handle("/hooks/claude", adapter.NewHandler(claudecode.Harness{}, dispatcher))
 
 		srv := &http.Server{Addr: ":" + port, Handler: mux}
 		go func() {
