@@ -11,6 +11,7 @@ replace (
 	semcom_internal => ../internal
 	semcom_llm => ../semcom_llm
 	semcom_personal => ../semcom_personal
+	semcom_session => ../semcom_session
 )
 
 require (
@@ -22,6 +23,7 @@ require (
 	semcom_internal v0.0.0-00010101000000-000000000000
 	semcom_llm v0.0.0-00010101000000-000000000000
 	semcom_personal v0.0.0-00010101000000-000000000000
+	semcom_session v0.0.0-00010101000000-000000000000
 	modernc.org/sqlite v1.50.0
 )
 

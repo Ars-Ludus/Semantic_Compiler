@@ -20,6 +20,7 @@ import (
 	semindex "semcom_embed"
 	llmclient "semcom_llm"
 	personal "semcom_personal"
+	session "semcom_session"
 	seminternal "semcom_internal"
 
 	_ "modernc.org/sqlite"
@@ -60,7 +61,7 @@ func main() {
 	defer store.Close()
 
 	// One shared SQLite connection for all personalization modules.
-	personalDB, err := openSharedDB(personalDBPath, personal.Schema, distill.Schema)
+	personalDB, err := openSharedDB(personalDBPath, personal.Schema, distill.Schema, session.Schema)
 	if err != nil {
 		log.Fatalf("open personal db: %v", err)
 	}
@@ -131,8 +132,9 @@ func main() {
 		dispatcher := func(ctx context.Context, req adapter.CanonicalRequest) (adapter.CanonicalResponse, error) {
 			if req.Op == adapter.OpIngest {
 				result, err := orch.Ingest(ctx, IngestRequest{
-					Text:   req.Prompt,
-					Source: semanticstore.Source(req.By),
+					Text:      req.Prompt,
+					SessionID: req.SessionID,
+					Source:    semanticstore.Source(req.By),
 				})
 				if err != nil {
 					return adapter.CanonicalResponse{}, err
@@ -153,9 +155,10 @@ func main() {
 			}
 
 			result, err := orch.Chat(ctx, ChatRequest{
-				Prompt: req.Prompt,
-				By:     semanticstore.Source(req.By),
-				TopK:   req.TopK,
+				Prompt:    req.Prompt,
+				SessionID: req.SessionID,
+				By:        semanticstore.Source(req.By),
+				TopK:      req.TopK,
 			})
 			if err != nil {
 				return adapter.CanonicalResponse{}, err
