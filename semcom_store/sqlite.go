@@ -105,6 +105,27 @@ func (s *sqliteStore) Get(ctx context.Context, id int32) (*Memory, error) {
 	return m, skRows.Err()
 }
 
+func (s *sqliteStore) GetIDsBySessionID(ctx context.Context, sessionID string) ([]int32, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM memories WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int32
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *sqliteStore) GetChunk(ctx context.Context, startID, endID int32) ([]*Memory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, turn_id, source, raw_message, created_at FROM memories WHERE id >= ? AND id <= ? ORDER BY id ASC`,

@@ -36,9 +36,10 @@ func (Harness) Decode(raw []byte) (adapter.CanonicalRequest, error) {
 		return adapter.CanonicalRequest{}, fmt.Errorf("unsupported hook_event_name %q: only UserPromptSubmit is handled at this endpoint", in.HookEventName)
 	}
 	return adapter.CanonicalRequest{
-		Op:     adapter.OpChat,
-		Prompt: in.Prompt,
-		By:     "user",
+		Op:        adapter.OpChat,
+		Prompt:    in.Prompt,
+		SessionID: in.SessionID,
+		By:        "user",
 	}, nil
 }
 

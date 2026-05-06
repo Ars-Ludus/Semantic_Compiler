@@ -76,7 +76,8 @@ func (r *Retriever) Refresh(ctx context.Context) error {
 
 // Query scores all indexed memories against queryL0IDs and returns the top-k
 // results sorted descending by score. Pass k=0 to return all matches.
-func (r *Retriever) Query(queryL0IDs []uint32, k int) []Result {
+// excludeIDs is an optional bitmap of memory IDs to ignore.
+func (r *Retriever) Query(queryL0IDs []uint32, k int, excludeIDs *roaring.Bitmap) []Result {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -86,7 +87,15 @@ func (r *Retriever) Query(queryL0IDs []uint32, k int) []Result {
 		if !ok {
 			continue
 		}
-		it := bm.Iterator()
+
+		var finalBM *roaring.Bitmap
+		if excludeIDs != nil && !excludeIDs.IsEmpty() {
+			finalBM = roaring.AndNot(bm, excludeIDs)
+		} else {
+			finalBM = bm
+		}
+
+		it := finalBM.Iterator()
 		for it.HasNext() {
 			scores[it.Next()]++
 		}

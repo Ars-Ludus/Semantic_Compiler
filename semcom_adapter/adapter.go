@@ -12,6 +12,7 @@ const (
 type CanonicalRequest struct {
 	Op        Op
 	Prompt    string
+	SessionID string
 	By        string // "user" | "model"
 	TopK      int    // 0 = use default
 	Benchmark string // "ignore" | "total" | "verbose"

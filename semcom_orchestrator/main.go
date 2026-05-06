@@ -90,6 +90,8 @@ func main() {
 		log.Fatalf("create personal retriever: %v", err)
 	}
 
+	sessionTracker := session.NewTracker(personalDB)
+
 	maxTurn, err := store.MaxTurnID(context.Background())
 	if err != nil {
 		log.Fatalf("read max turn_id: %v", err)
@@ -100,6 +102,7 @@ func main() {
 		personal:          pMatcher,
 		personalStore:     pStore,
 		personalRetriever: pRetriever,
+		sessionTracker:    sessionTracker,
 		distillStore:      dStore,
 		distillRetriever:  dRetriever,
 		thresholds:        semindex.Thresholds{L2: 0.25, L1: 0.20, L0: 0.15},

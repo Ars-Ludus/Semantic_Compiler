@@ -39,6 +39,8 @@ type Store interface {
 	MaxTurnID(ctx context.Context) (int32, error)
 	MaxID(ctx context.Context) (int32, error)
 
+	GetIDsBySessionID(ctx context.Context, sessionID string) ([]int32, error)
+
 	GetChunk(ctx context.Context, startID, endID int32) ([]*Memory, error)
 	MemoriesContainingWord(ctx context.Context, word string) ([]*Memory, error)
 

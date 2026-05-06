@@ -38,7 +38,8 @@ func (r *PersonalRetriever) AddLink(personalID uint32, memoryID int32) {
 }
 
 // MemoryTokenCounts returns a map of memory_id → personal token hit count for the given personal IDs.
-func (r *PersonalRetriever) MemoryTokenCounts(personalIDs []uint32) map[int32]int {
+// excludeIDs is an optional bitmap of memory IDs to ignore.
+func (r *PersonalRetriever) MemoryTokenCounts(personalIDs []uint32, excludeIDs *roaring.Bitmap) map[int32]int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -48,7 +49,15 @@ func (r *PersonalRetriever) MemoryTokenCounts(personalIDs []uint32) map[int32]in
 		if !ok {
 			continue
 		}
-		it := bm.Iterator()
+
+		var finalBM *roaring.Bitmap
+		if excludeIDs != nil && !excludeIDs.IsEmpty() {
+			finalBM = roaring.AndNot(bm, excludeIDs)
+		} else {
+			finalBM = bm
+		}
+
+		it := finalBM.Iterator()
 		for it.HasNext() {
 			counts[int32(it.Next())]++ //nolint:gosec
 		}

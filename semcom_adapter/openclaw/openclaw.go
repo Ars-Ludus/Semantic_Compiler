@@ -13,6 +13,7 @@ type Harness struct{}
 type wireRequest struct {
 	Operation string `json:"operation"`
 	Prompt    string `json:"prompt"`
+	SessionID string `json:"session_id"`
 	By        string `json:"by"`
 	Source    string `json:"source"`    // accepted, reserved for future document tagging
 	TopK      int    `json:"top_k"`
@@ -47,6 +48,7 @@ func (Harness) Decode(raw []byte) (adapter.CanonicalRequest, error) {
 	return adapter.CanonicalRequest{
 		Op:        adapter.Op(wr.Operation),
 		Prompt:    wr.Prompt,
+		SessionID: wr.SessionID,
 		By:        wr.By,
 		TopK:      wr.TopK,
 		Benchmark: wr.Benchmark,

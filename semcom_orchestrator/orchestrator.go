@@ -10,6 +10,7 @@ import (
 	distill "semcom_distill"
 	semindex "semcom_embed"
 	personal "semcom_personal"
+	session "semcom_session"
 )
 
 
@@ -30,6 +31,7 @@ type Orchestrator struct {
 	personal           PersonalMatcher
 	personalStore      *personal.Store
 	personalRetriever  *personal.PersonalRetriever
+	sessionTracker     *session.Tracker
 	distillStore       *distill.Store
 	distillRetriever   *distill.DistillationRetriever
 	thresholds         semindex.Thresholds
@@ -40,8 +42,9 @@ type Orchestrator struct {
 
 // IngestRequest is the input to the Ingest pipeline.
 type IngestRequest struct {
-	Text   string
-	Source semanticstore.Source
+	Text      string
+	SessionID string
+	Source    semanticstore.Source
 }
 
 // IngestResult is returned after a successful Ingest.
@@ -79,9 +82,13 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 	}()
 
 	go func() {
-		words := semindex.SplitWords(req.Text)
-		ids, _ := o.personal.Match(words)
-		personalCh <- ids
+		if o.personal != nil {
+			words := semindex.SplitWords(req.Text)
+			ids, _ := o.personal.Match(words)
+			personalCh <- ids
+		} else {
+			personalCh <- nil
+		}
 	}()
 
 	emb := <-embedCh
@@ -133,9 +140,10 @@ type RetrieveResult struct {
 
 // ChatRequest is the input to the Chat pipeline.
 type ChatRequest struct {
-	Prompt string
-	By     semanticstore.Source
-	TopK   int
+	Prompt    string
+	SessionID string
+	By        semanticstore.Source
+	TopK      int
 }
 
 // ChatBenchmark holds per-step timing in microseconds.
@@ -180,16 +188,20 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 	}()
 
 	go func() {
-		words := semindex.SplitWords(req.Prompt)
-		ids, _ := o.personal.Match(words)
-		personalCh <- ids
+		if o.personal != nil {
+			words := semindex.SplitWords(req.Prompt)
+			ids, _ := o.personal.Match(words)
+			personalCh <- ids
+		} else {
+			personalCh <- nil
+		}
 	}()
 
 	emb := <-embedCh
 	personalIDs := <-personalCh
 
 	t1 := time.Now()
-	ctxHits, err := o.tieredRetrieve(ctx, emb.keys, personalIDs)
+	ctxHits, err := o.tieredRetrieve(ctx, emb.keys, personalIDs, req.SessionID)
 	if err != nil {
 		return ChatResult{}, err
 	}
@@ -250,7 +262,7 @@ func (o *Orchestrator) Retrieve(ctx context.Context, text string, k int) (Retrie
 		}
 	}
 
-	results := o.retriever.Query(globalKeys, k)
+	results := o.retriever.Query(globalKeys, k, nil)
 
 	return RetrieveResult{
 		Results:     results,
