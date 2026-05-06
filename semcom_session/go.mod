@@ -3,12 +3,15 @@ module semcom_session
 go 1.26.2
 
 require (
-	github.com/RoaringBitmap/roaring v1.9.4 // indirect
+	github.com/RoaringBitmap/roaring v1.9.4
+	modernc.org/sqlite v1.50.0
+)
+
+require (
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-sqlite3 v1.14.44 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -16,5 +19,4 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.0 // indirect
 )
