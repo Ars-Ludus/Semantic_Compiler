@@ -51,3 +51,30 @@ func (t *Tracker) GetRetrievedIDs(ctx context.Context, sessionID string) *roarin
 	}
 	return bm
 }
+
+// MarkRetrieved appends newly retrieved memory IDs to the session's record.
+func (t *Tracker) MarkRetrieved(ctx context.Context, sessionID string, memoryIDs []int32) error {
+	if sessionID == "" || len(memoryIDs) == 0 {
+		return nil
+	}
+
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO session_retrievals (session_id, memory_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range memoryIDs {
+		if _, err := stmt.ExecContext(ctx, sessionID, id); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}

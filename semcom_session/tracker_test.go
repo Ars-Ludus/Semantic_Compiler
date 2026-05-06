@@ -3,28 +3,26 @@ package semcom_session
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 
-	"github.com/RoaringBitmap/roaring"
 	_ "modernc.org/sqlite"
 )
 
-func TestGetRetrievedIDs(t *testing.T) {
-	dbPath := "test_tracker.db"
-	os.Remove(dbPath)
-	defer os.Remove(dbPath)
-
-	db, err := sql.Open("sqlite", dbPath)
+func openTestDB(t *testing.T) *sql.DB {
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
-		t.Fatalf("failed to open db: %v", err)
+		t.Fatalf("failed to open in-memory db: %v", err)
 	}
-	defer db.Close()
 
-	// Initialize schema
 	if _, err := db.Exec(Schema); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
 	}
+	return db
+}
+
+func TestGetRetrievedIDs(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
 
 	tracker := &Tracker{db: db}
 	ctx := context.Background()
@@ -40,7 +38,6 @@ func TestGetRetrievedIDs(t *testing.T) {
 		}
 
 		bitmap := tracker.GetRetrievedIDs(ctx, sessionID)
-		var _ *roaring.Bitmap = bitmap // Ensure roaring is used
 
 		if bitmap.GetCardinality() != uint64(len(docIDs)) {
 			t.Errorf("expected cardinality %d, got %d", len(docIDs), bitmap.GetCardinality())
@@ -66,4 +63,30 @@ func TestGetRetrievedIDs(t *testing.T) {
 			t.Error("expected empty bitmap for non-existent sessionID")
 		}
 	})
+}
+
+func TestMarkRetrieved(t *testing.T) {
+	db := openTestDB(t)
+	tracker := NewTracker(db)
+	ctx := context.Background()
+
+	ids := []int32{5, 15, 25}
+	if err := tracker.MarkRetrieved(ctx, "sess3", ids); err != nil {
+		t.Fatalf("MarkRetrieved failed: %v", err)
+	}
+
+	bm := tracker.GetRetrievedIDs(ctx, "sess3")
+	if bm.GetCardinality() != 3 {
+		t.Errorf("expected 3 items, got %d", bm.GetCardinality())
+	}
+	for _, id := range ids {
+		if !bm.Contains(uint32(id)) {
+			t.Errorf("bitmap missing id %d", id)
+		}
+	}
+
+	// Test idempotency (inserting same ID again shouldn't error due to primary key conflict)
+	if err := tracker.MarkRetrieved(ctx, "sess3", []int32{15}); err != nil {
+		t.Fatalf("MarkRetrieved duplicate failed: %v", err)
+	}
 }
