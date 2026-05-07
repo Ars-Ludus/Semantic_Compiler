@@ -1,6 +1,6 @@
 # SemCom
 
-Semantic Communication (SemCom) for AI agents.
+Semantic Compiler (SemCom) memory system / externalized parametric data for AI agents.
 
 ## Installation
 
