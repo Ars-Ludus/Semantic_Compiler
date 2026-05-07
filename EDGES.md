@@ -21,7 +21,7 @@ The primary bridge between isolated libraries.
 - **Retrieval**: `semcom_orchestrator` -> `semcom_retrieve`
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Contextual data fetching.
-- **LLM Integration**: `semcom_orchestrator` -> `semcom_llm`
+- **LLM Integration**: `semcom_orchestrator` -> `providertron`
   - File: `semcom_orchestrator/main.go`
   - Usage: Providing LLM capability to personal discovery and distillation.
 - **Session Tracking**: `semcom_orchestrator` -> `semcom_session`
@@ -50,7 +50,7 @@ Managed via `go.work`.
 - `/semcom_orchestrator`: Main integration service.
 - `/semcom_distill`: Raw message processing.
 - `/semcom_retrieve`: Contextual data fetching.
-- `/semcom_llm`: LLM integration layer.
 - `/semcom_session`: Session-scoped retrieval deduplication tracker.
 - `/dashboard`: Web-based visualization.
 - `/internal`: Shared utilities and environment configuration.
+- `providertron`: Unified LLM provider interface (external dependency).

@@ -71,7 +71,7 @@ SEMCOM_DIR=~/.local/share/semcom SEMCOM_PORT=8080 bash install.sh
 The API key persists in `~/.local/share/semcom/.env` and survives gateway and container restarts:
 
 ```bash
-echo 'GOOGLE_API_KEY=your_key_here' >> ~/.local/share/semcom/.env
+echo 'GEMINI_API_KEY=your_key_here' >> ~/.local/share/semcom/.env
 ```
 
 The `semcom-start` hook and `start.sh` both source this file before launching the binary.
@@ -179,7 +179,7 @@ Compresses chunks into dense topic/snippet pairs and extracts named entities. Im
 ~/.local/share/semcom/semcom distill
 ```
 
-The API key is read from `~/.local/share/semcom/.env` (or `GOOGLE_API_KEY` env var). Progress is checkpointed every 15 memories — interrupting and restarting is safe.
+The API key is read from `~/.local/share/semcom/.env` (or `GEMINI_API_KEY` env var). Progress is checkpointed every 15 memories — interrupting and restarting is safe.
 
 ---
 

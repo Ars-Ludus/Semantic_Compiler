@@ -398,18 +398,19 @@ type Entity struct {
 
 ---
 
-## semcom_llm
+## providertron
 
-Concrete LLM client wrapping providertron/gemini. Satisfies the `LLMClient` interface of semcom_distill via structural typing.
+Unified LLM provider interface. semcom uses the "gemini" provider for distillation and personal token discovery.
 
-**Source:** `../semcom_llm`
-**Module:** `semcom_llm` (replace directive)
-**Import:** `llmclient "semcom_llm"`
+**Source:** `github.com/Ars-Ludus/providertron`
+**Import:** `providertron "github.com/Ars-Ludus/providertron"`
 
 ```go
-client, err := llmclient.New(apiKey, model)
-// client.GenerateJSON satisfies distill.LLMClient
+p, err := providertron.Get("gemini")
+// p.Generate satisfies distillation needs
 ```
+
+Authentication is handled via `GEMINI_API_KEY` environment variable or `provider_auth.json`.
 
 ---
 

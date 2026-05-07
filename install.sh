@@ -44,13 +44,13 @@ if [ ! -f "$SEMCOM_DIR/.env" ]; then
 # semcom environment — sourced by start.sh and the semcom-start hook on every boot.
 # Set your Gemini API key here so it persists across gateway and container restarts.
 
-GOOGLE_API_KEY=
+GEMINI_API_KEY=
 
 # Optional overrides:
 # GEMINI_MODEL=gemini-3.1-flash-lite-preview
 # PORT=8080
 EOF
-  echo "    OK: .env template written — add your GOOGLE_API_KEY to $SEMCOM_DIR/.env"
+  echo "    OK: .env template written — add your GEMINI_API_KEY to $SEMCOM_DIR/.env"
 else
   echo "    OK: .env already exists — leaving it unchanged"
 fi
@@ -175,7 +175,7 @@ echo ""
 echo "==> Install complete."
 echo ""
 echo "Next steps:"
-echo "  1. Add your Gemini API key:      echo 'GOOGLE_API_KEY=your_key' >> $SEMCOM_DIR/.env"
+echo "  1. Add your Gemini API key:      echo 'GEMINI_API_KEY=your_key' >> $SEMCOM_DIR/.env"
 echo "  2. Import conversation history:  $SEMCOM_DIR/semcom ingest-sessions"
 echo "  3. Run distillation:             $SEMCOM_DIR/start.sh && $SEMCOM_DIR/semcom distill"
 echo "  Logs:                            tail -f $SEMCOM_DIR/semcom.log"
