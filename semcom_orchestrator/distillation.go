@@ -14,7 +14,7 @@ import (
 
 // RunDistillationPass extracts knowledge snippets and personal entities from conversation chunks.
 func RunDistillationPass(ctx context.Context, o *Orchestrator, llm distill.LLMClient) error {
-	log.Println("starting distillation pass...")
+	log.Println("starting distillation pass (legacy: processes memories without session_id)...")
 
 	lastIDStr, err := o.distillStore.GetMetadata("last_distilled_id")
 	if err != nil {

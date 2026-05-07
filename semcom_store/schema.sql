@@ -4,9 +4,11 @@ CREATE TABLE IF NOT EXISTS memories (
     summary_id  INTEGER,
     source      TEXT    NOT NULL CHECK(source IN ('user', 'model')),
     raw_message TEXT    NOT NULL,
+    session_id  TEXT,
     created_at  TEXT    NOT NULL
                 DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+
 
 CREATE TABLE IF NOT EXISTS memory_semkeys (
     memory_id    INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,

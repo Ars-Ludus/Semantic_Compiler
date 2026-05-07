@@ -22,6 +22,7 @@ type Distillation struct {
 	ID          int32
 	Topic       string
 	Snippet     string
+	SessionID   string   // originating session; empty for legacy chunk distillations
 	PersonalIDs []uint32
 	SemKeys     []uint32
 }
@@ -45,8 +46,8 @@ func (s *Store) InsertDistillation(d *Distillation) (int32, error) {
 	}
 
 	res, err := tx.Exec(
-		`INSERT INTO distillations (topic, snippet, personal_tokens) VALUES (?, ?, ?)`,
-		d.Topic, d.Snippet, string(pIDsJSON),
+		`INSERT INTO distillations (topic, snippet, personal_tokens, session_id) VALUES (?, ?, ?, ?)`,
+		d.Topic, d.Snippet, string(pIDsJSON), d.SessionID,
 	)
 	if err != nil {
 		return 0, err
@@ -146,6 +147,13 @@ func (s *Store) AllDistillations(ctx context.Context) ([]*Distillation, error) {
 		}
 	}
 	return all, skRows.Err()
+}
+
+// DeleteDistillationsBySessionID removes all distillations for the given session.
+// Semkey rows are removed automatically via ON DELETE CASCADE.
+func (s *Store) DeleteDistillationsBySessionID(ctx context.Context, sessionID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM distillations WHERE session_id = ?`, sessionID)
+	return err
 }
 
 // GetMetadata returns the value for key, or "" if not set.

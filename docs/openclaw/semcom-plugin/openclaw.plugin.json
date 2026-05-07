@@ -1,0 +1,17 @@
+{
+  "id": "semcom-memory",
+  "name": "Semcom Memory",
+  "description": "Injects relevant semantic memories from semcom before each reply; ingests agent responses into semcom's store.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -17,3 +17,4 @@ CREATE TABLE IF NOT EXISTS distill_metadata (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+

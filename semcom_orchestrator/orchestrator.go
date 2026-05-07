@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,13 @@ type Orchestrator struct {
 	store              semanticstore.Store
 	retriever          *semcomretrieve.Retriever
 	turnSeq            atomic.Int32 // monotonically increasing; seeded from DB at startup
+
+	// Auto-distillation: when set, the orchestrator spawns a background distillation
+	// of the previous session whenever it detects a session ID change.
+	llmClient       distill.LLMClient
+	userLabel       string
+	modelLabel      string
+	activeSessionID atomic.Value // stores string; tracks the most recently seen session ID
 }
 
 // IngestRequest is the input to the Ingest pipeline.
@@ -58,6 +66,8 @@ type IngestResult struct {
 
 // Ingest embeds the text and matches personal tokens concurrently, then stores the result.
 func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestResult, error) {
+	o.maybeTriggerDistill(req.SessionID)
+
 	type embedOut struct {
 		keys        []uint32
 		queryTokens int
@@ -81,25 +91,18 @@ func (o *Orchestrator) Ingest(ctx context.Context, req IngestRequest) (IngestRes
 		embedCh <- embedOut{keys, stats.QueryTokens, time.Since(t0).Microseconds()}
 	}()
 
-	go func() {
-		if o.personal != nil {
-			words := semindex.SplitWords(req.Text)
-			ids, _ := o.personal.Match(words)
-			personalCh <- ids
-		} else {
-			personalCh <- nil
-		}
-	}()
+	go func() { personalCh <- o.matchPersonal(req.Text) }()
 
 	emb := <-embedCh
 	personalIDs := <-personalCh
 
 	t1 := time.Now()
 	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
-		TurnID: o.turnSeq.Add(1),
-		Source: req.Source,
-		Raw:    req.Text,
-		SemKey: emb.keys,
+		TurnID:    o.turnSeq.Add(1),
+		Source:    req.Source,
+		Raw:       req.Text,
+		SessionID: req.SessionID,
+		SemKey:    emb.keys,
 	})
 	if err != nil {
 		return IngestResult{}, err
@@ -165,6 +168,8 @@ type ChatResult struct {
 // tiered retrieval, then stores the prompt. Retrieval runs before Insert to
 // avoid self-contamination.
 func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) {
+	o.maybeTriggerDistill(req.SessionID)
+
 	type embedOut struct {
 		keys []uint32
 		us   int64
@@ -187,15 +192,7 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 		embedCh <- embedOut{keys, time.Since(t0).Microseconds()}
 	}()
 
-	go func() {
-		if o.personal != nil {
-			words := semindex.SplitWords(req.Prompt)
-			ids, _ := o.personal.Match(words)
-			personalCh <- ids
-		} else {
-			personalCh <- nil
-		}
-	}()
+	go func() { personalCh <- o.matchPersonal(req.Prompt) }()
 
 	emb := <-embedCh
 	personalIDs := <-personalCh
@@ -209,10 +206,11 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 
 	t2 := time.Now()
 	memoryID, err := o.store.Insert(ctx, &semanticstore.Memory{
-		TurnID: o.turnSeq.Add(1),
-		Source: req.By,
-		Raw:    req.Prompt,
-		SemKey: emb.keys,
+		TurnID:    o.turnSeq.Add(1),
+		Source:    req.By,
+		Raw:       req.Prompt,
+		SessionID: req.SessionID,
+		SemKey:    emb.keys,
 	})
 	if err != nil {
 		return ChatResult{}, err
@@ -244,6 +242,33 @@ func (o *Orchestrator) Chat(ctx context.Context, req ChatRequest) (ChatResult, e
 			TotalUs:    emb.us + retrieveUs + storeUs,
 		},
 	}, nil
+}
+
+// maybeTriggerDistill checks whether the session ID has changed since the last call.
+// If it has, and an LLM client is configured, it spawns a background goroutine to
+// force-re-distill the session that just ended.
+func (o *Orchestrator) maybeTriggerDistill(sessionID string) {
+	if o.llmClient == nil || sessionID == "" {
+		return
+	}
+	prev, _ := o.activeSessionID.Swap(sessionID).(string)
+	if prev == "" || prev == sessionID {
+		return
+	}
+	log.Printf("session change detected (%s → %s); scheduling auto-distill of %s", prev, sessionID, prev)
+	go func() {
+		if err := distillOneSession(context.Background(), o, o.llmClient, prev, o.userLabel, o.modelLabel, true); err != nil {
+			log.Printf("auto-distill session %s: %v", prev, err)
+		}
+	}()
+}
+
+func (o *Orchestrator) matchPersonal(text string) []uint32 {
+	if o.personal == nil {
+		return nil
+	}
+	ids, _ := o.personal.Match(semindex.SplitWords(text))
+	return ids
 }
 
 // Retrieve embeds the query text and returns ranked memory_id + score pairs.

@@ -3,14 +3,20 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	providertron "github.com/Ars-Ludus/providertron"
+	"github.com/Ars-Ludus/providertron/capability"
+	"github.com/Ars-Ludus/providertron/provider"
 	semanticstore "github.com/ars/semantic_store"
 	semcomretrieve "github.com/ars/semcom_retrieve"
 	adapter "semcom_adapter"
@@ -18,10 +24,9 @@ import (
 	"semcom_adapter/openclaw"
 	distill "semcom_distill"
 	semindex "semcom_embed"
-	llmclient "semcom_llm"
+	seminternal "semcom_internal"
 	personal "semcom_personal"
 	session "semcom_session"
-	seminternal "semcom_internal"
 
 	_ "modernc.org/sqlite"
 )
@@ -37,6 +42,8 @@ func main() {
 	dbPath := seminternal.EnvOr("DB_PATH", filepath.Join(exeDir, "memory.db"))
 	personalDBPath := seminternal.EnvOr("PERSONAL_DB_PATH", filepath.Join(exeDir, "personal.db"))
 	port := seminternal.EnvOr("PORT", "8080")
+	userLabel := seminternal.EnvOr("SEMCOM_USER_NAME", "User")
+	modelLabel := seminternal.EnvOr("SEMCOM_MODEL_NAME", "Assistant")
 
 	subcommand := "serve"
 	if len(os.Args) > 1 {
@@ -44,9 +51,9 @@ func main() {
 	}
 
 	switch subcommand {
-	case "serve", "distill", "ingest-sessions":
+	case "serve", "distill", "distill-sessions", "ingest-sessions":
 	default:
-		log.Fatalf("unknown subcommand %q; use: serve, distill, ingest-sessions", subcommand)
+		log.Fatalf("unknown subcommand %q; use: serve, distill, distill-sessions, ingest-sessions", subcommand)
 	}
 
 	idx, err := semindex.Load(indexPath)
@@ -61,11 +68,26 @@ func main() {
 	defer store.Close()
 
 	// One shared SQLite connection for all personalization modules.
-	personalDB, err := openSharedDB(personalDBPath, personal.Schema, distill.Schema, session.Schema)
+	personalDB, err := openSharedDB(personalDBPath, personal.Schema, distill.Schema)
 	if err != nil {
 		log.Fatalf("open personal db: %v", err)
 	}
 	defer personalDB.Close()
+
+	// Session tracking lives in memory.db alongside the memories it references.
+	memoryDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		log.Fatalf("open memory db for session tracker: %v", err)
+	}
+	if _, err := memoryDB.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		memoryDB.Close()
+		log.Fatalf("set busy_timeout on memory db: %v", err)
+	}
+	if _, err := memoryDB.Exec(session.Schema); err != nil {
+		memoryDB.Close()
+		log.Fatalf("apply session schema: %v", err)
+	}
+	defer memoryDB.Close()
 
 	pStore := personal.NewStore(personalDB)
 	dStore := distill.NewStore(personalDB)
@@ -90,7 +112,7 @@ func main() {
 		log.Fatalf("create personal retriever: %v", err)
 	}
 
-	sessionTracker := session.NewTracker(personalDB)
+	sessionTracker := session.NewTracker(memoryDB)
 
 	maxTurn, err := store.MaxTurnID(context.Background())
 	if err != nil {
@@ -116,11 +138,27 @@ func main() {
 
 	switch subcommand {
 	case "distill":
-		client := newLLMClient()
+		client, err := newLLMClient()
+		if err != nil {
+			log.Fatalf("%v", err)
+		}
 		if err := RunDistillationPass(ctx, orch, client); err != nil {
 			log.Fatalf("distillation: %v", err)
 		}
 		log.Println("distillation complete.")
+
+	case "distill-sessions":
+		fs := flag.NewFlagSet("distill-sessions", flag.ExitOnError)
+		force := fs.Bool("force", false, "re-distill sessions that were already processed")
+		fs.Parse(os.Args[2:])
+		client, err := newLLMClient()
+		if err != nil {
+			log.Fatalf("%v", err)
+		}
+		if err := RunSessionDistillationPass(ctx, orch, client, userLabel, modelLabel, *force); err != nil {
+			log.Fatalf("session distillation: %v", err)
+		}
+		log.Println("session distillation complete.")
 
 	case "ingest-sessions":
 		defaultDir := os.ExpandEnv("$HOME/.openclaw/agents/main/sessions")
@@ -132,6 +170,16 @@ func main() {
 		}
 
 	case "serve":
+		// Enable auto-distillation if credentials are configured; non-fatal if absent.
+		if c, err := newLLMClient(); err == nil {
+			orch.llmClient = c
+			orch.userLabel = userLabel
+			orch.modelLabel = modelLabel
+			log.Println("auto-distill enabled: previous session will be distilled on session change")
+		} else {
+			log.Printf("auto-distill disabled: %v", err)
+		}
+
 		dispatcher := func(ctx context.Context, req adapter.CanonicalRequest) (adapter.CanonicalResponse, error) {
 			if req.Op == adapter.OpIngest {
 				result, err := orch.Ingest(ctx, IngestRequest{
@@ -217,6 +265,10 @@ func openSharedDB(path string, schemas ...string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
 		db.Close()
 		return nil, err
@@ -227,18 +279,58 @@ func openSharedDB(path string, schemas ...string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
+	// Idempotent migrations for columns added after initial schema release.
+	for _, stmt := range []string{
+		`ALTER TABLE distillations ADD COLUMN session_id TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_distillations_session ON distillations(session_id)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migrate: %w", err)
+			}
+		}
+	}
 	return db, nil
 }
 
-func newLLMClient() *llmclient.Client {
-	apiKey := seminternal.EnvOr("GOOGLE_API_KEY", seminternal.EnvOr("GEMINI_API_KEY", ""))
-	if apiKey == "" {
-		log.Fatal("GOOGLE_API_KEY or GEMINI_API_KEY required for LLM passes")
-	}
-	model := seminternal.EnvOr("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
-	client, err := llmclient.New(apiKey, model)
+func newLLMClient() (distill.LLMClient, error) {
+	p, err := providertron.Get("gemini")
 	if err != nil {
-		log.Fatalf("create llm client: %v", err)
+		return nil, err
 	}
-	return client
+	return &providerLLMClient{p: p}, nil
+}
+
+// providerLLMClient adapts a providertron Provider to distill.LLMClient.
+type providerLLMClient struct {
+	p *provider.Provider
+}
+
+func (c *providerLLMClient) GenerateJSON(ctx context.Context, prompt string, target interface{}) error {
+	req := capability.GenerateRequest{
+		Messages: []capability.Message{
+			{Role: "user", Content: prompt},
+		},
+		Temperature: 0.1,
+	}
+	resp, err := c.p.Generate(ctx, req)
+	if err != nil {
+		return fmt.Errorf("providertron generate: %w", err)
+	}
+	s := strings.TrimSpace(resp.Content)
+	if i := strings.Index(s, "```"); i >= 0 {
+		s = s[i+3:]
+		if strings.HasPrefix(s, "json") {
+			s = s[4:]
+		}
+		if j := strings.Index(s, "```"); j >= 0 {
+			s = s[:j]
+		}
+		s = strings.TrimSpace(s)
+	}
+	if err := json.Unmarshal([]byte(s), target); err != nil {
+		return fmt.Errorf("parse JSON: %w\nresponse: %s", err, resp.Content)
+	}
+	return nil
 }

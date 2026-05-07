@@ -22,7 +22,7 @@ type HitType string
 
 const (
 	HitDistilled HitType = "distilled"
-	HitRaw       HitType = "raw"
+	HitWiki      HitType = "wiki"
 )
 
 type ContextHit struct {

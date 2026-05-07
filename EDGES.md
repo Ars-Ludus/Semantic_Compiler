@@ -24,6 +24,9 @@ The primary bridge between isolated libraries.
 - **LLM Integration**: `semcom_orchestrator` -> `semcom_llm`
   - File: `semcom_orchestrator/main.go`
   - Usage: Providing LLM capability to personal discovery and distillation.
+- **Session Tracking**: `semcom_orchestrator` -> `semcom_session`
+  - File: `semcom_orchestrator/main.go`, `semcom_orchestrator/retrieval.go`
+  - Usage: Tracks which memory IDs have been retrieved in each session to prevent re-surfacing the same context. `Tracker` is backed by a dedicated connection to `memory.db`.
 - **Adapter**: `semcom_orchestrator` -> `semcom_adapter`
   - File: `semcom_orchestrator/main.go`
   - Usage: HTTP handler construction. The orchestrator provides a `Dispatcher` closure to `adapter.NewHandler`; the adapter owns request decoding, validation, and response encoding. The openClaw harness (`semcom_adapter/openclaw`) translates the openClaw Plugin SDK wire format.
@@ -48,5 +51,6 @@ Managed via `go.work`.
 - `/semcom_distill`: Raw message processing.
 - `/semcom_retrieve`: Contextual data fetching.
 - `/semcom_llm`: LLM integration layer.
+- `/semcom_session`: Session-scoped retrieval deduplication tracker.
 - `/dashboard`: Web-based visualization.
 - `/internal`: Shared utilities and environment configuration.

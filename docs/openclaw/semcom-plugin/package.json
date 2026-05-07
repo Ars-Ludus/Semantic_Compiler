@@ -1,0 +1,11 @@
+{
+  "name": "openclaw-semcom-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Semcom semantic memory plugin for openClaw",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

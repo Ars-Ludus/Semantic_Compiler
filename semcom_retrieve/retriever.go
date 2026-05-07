@@ -82,6 +82,7 @@ func (r *Retriever) Query(queryL0IDs []uint32, k int, excludeIDs *roaring.Bitmap
 	defer r.mu.RUnlock()
 
 	scores := make(map[uint32]uint8, 64)
+	useExclusion := excludeIDs != nil && !excludeIDs.IsEmpty()
 	for _, l0id := range queryL0IDs {
 		bm, ok := r.index[l0id]
 		if !ok {
@@ -89,7 +90,7 @@ func (r *Retriever) Query(queryL0IDs []uint32, k int, excludeIDs *roaring.Bitmap
 		}
 
 		var finalBM *roaring.Bitmap
-		if excludeIDs != nil && !excludeIDs.IsEmpty() {
+		if useExclusion {
 			finalBM = roaring.AndNot(bm, excludeIDs)
 		} else {
 			finalBM = bm

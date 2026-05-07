@@ -87,10 +87,13 @@ func (r *DistillationRetriever) Add(id int32, semKeys []uint32, personalIDs []ui
 
 // Query scores all candidate distillations against l0IDs and personalIDs.
 // Personal token matches add personalWeight to the score per matched token.
+// Distillation IDs present in excludeIDs are skipped; pass nil to disable exclusion.
 // Results are returned sorted descending by score.
-func (r *DistillationRetriever) Query(l0IDs []uint32, personalIDs []uint32, personalWeight int) []DistillationResult {
+func (r *DistillationRetriever) Query(l0IDs []uint32, personalIDs []uint32, personalWeight int, excludeIDs *roaring.Bitmap) []DistillationResult {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	useExclusion := excludeIDs != nil && !excludeIDs.IsEmpty()
 
 	scores := make(map[uint32]int)
 	for _, id := range l0IDs {
@@ -100,7 +103,11 @@ func (r *DistillationRetriever) Query(l0IDs []uint32, personalIDs []uint32, pers
 		}
 		it := bm.Iterator()
 		for it.HasNext() {
-			scores[it.Next()]++
+			did := it.Next()
+			if useExclusion && excludeIDs.Contains(did) {
+				continue
+			}
+			scores[did]++
 		}
 	}
 	for _, id := range personalIDs {
@@ -110,7 +117,11 @@ func (r *DistillationRetriever) Query(l0IDs []uint32, personalIDs []uint32, pers
 		}
 		it := bm.Iterator()
 		for it.HasNext() {
-			scores[it.Next()] += personalWeight
+			did := it.Next()
+			if useExclusion && excludeIDs.Contains(did) {
+				continue
+			}
+			scores[did] += personalWeight
 		}
 	}
 
@@ -122,6 +133,26 @@ func (r *DistillationRetriever) Query(l0IDs []uint32, personalIDs []uint32, pers
 		return results[i].Score > results[j].Score
 	})
 	return results
+}
+
+// GetByPersonalID returns distillation IDs directly associated with the given personal token,
+// ordered by ID descending (most recent first).
+func (r *DistillationRetriever) GetByPersonalID(id uint32) []int32 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	bm, ok := r.personalIndex[id]
+	if !ok {
+		return nil
+	}
+	arr := bm.ToArray() // ascending
+	for i, j := 0, len(arr)-1; i < j; i, j = i+1, j-1 {
+		arr[i], arr[j] = arr[j], arr[i]
+	}
+	result := make([]int32, len(arr))
+	for i, v := range arr {
+		result[i] = int32(v) //nolint:gosec
+	}
+	return result
 }
 
 func addToBitmap(index map[uint32]*roaring.Bitmap, key, value uint32) {

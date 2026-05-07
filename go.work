@@ -7,7 +7,6 @@ use (
 	./semcom_adapter
 	./semcom_distill
 	./semcom_embed
-	./semcom_llm
 	./semcom_orchestrator
 	./semcom_personal
 	./semcom_retrieve

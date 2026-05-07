@@ -24,6 +24,7 @@ POST /chat  (any harness)
      ├─ semcom_personal.PersonalRetriever       — personal reverse index (personal_id → memory_ids)
      ├─ semcom_distill.DistillationRetriever    — distillation reverse index (l0+personal → distillation_ids)
      ├─ semcom_store.Store                      — memory persistence (memory.db)
+     ├─ semcom_session.Tracker                  — session retrieval deduplication (memory.db, separate connection)
      └─ semcom_personal.Store + semcom_distill.Store  — personalization persistence (personal.db)
 ```
 
@@ -129,6 +130,10 @@ type Store interface {
     MaxTurnID(ctx context.Context) (int32, error)
     MaxID(ctx context.Context) (int32, error)
 
+    GetIDsBySessionID(ctx context.Context, sessionID string) ([]int32, error)
+    GetDistinctSessionIDs(ctx context.Context) ([]string, error)
+    GetMemoriesBySessionID(ctx context.Context, sessionID string) ([]*Memory, error)
+
     GetChunk(ctx context.Context, startID, endID int32) ([]*Memory, error)
     MemoriesContainingWord(ctx context.Context, word string) ([]*Memory, error)
 
@@ -144,6 +149,7 @@ type Memory struct {
     TurnID    int32
     Source    Source     // "user" | "model"
     Raw       string
+    SessionID string     // originating session; empty for memories ingested without a session
     CreatedAt time.Time
     SemKey    []uint32   // L0 cluster IDs
 }
@@ -163,6 +169,7 @@ CREATE TABLE memories (
     turn_id     INTEGER NOT NULL,
     source      TEXT    NOT NULL CHECK(source IN ('user','model')),
     raw_message TEXT    NOT NULL,
+    session_id  TEXT,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
@@ -196,7 +203,7 @@ err := retriever.Refresh(ctx)
 ### Querying
 
 ```go
-results := retriever.Query(l0IDs, topK)  // topK=0 returns all matches
+results := retriever.Query(l0IDs, topK, excludeIDs)  // topK=0 returns all matches; excludeIDs may be nil
 // []Result{MemoryID int32, Score int}
 // Score = count of shared L0 cluster IDs between query and memory
 ```
@@ -252,8 +259,8 @@ pRetriever, err := personal.NewPersonalRetriever(pStore)  // loads all links at 
 
 pRetriever.AddLink(personalID uint32, memoryID int32)  // call after LinkMemory
 
-counts := pRetriever.MemoryTokenCounts(personalIDs)  // map[int32]int (memory_id → hit count)
-// Multiply by personalWeight (5) when merging into raw retrieval scores.
+counts := pRetriever.MemoryTokenCounts(personalIDs, excludeIDs)  // excludeIDs may be nil; map[int32]int (memory_id → hit count)
+// Multiply by personalWeight (5) when merging into retrieval scores.
 ```
 
 ### Token / MemoryLink
@@ -292,7 +299,7 @@ CREATE INDEX idx_mpt_personal ON memory_personal_tokens (personal_id);
 
 ## semcom_distill
 
-Distillation store, LLM extraction, and distillation reverse index. Compresses conversation chunks into topic/snippet pairs and extracts named entities. Backed by `personal.db` (shared with semcom_personal).
+Distillation store, LLM extraction, and distillation reverse index. Supports two extraction modes: a legacy sliding-window pass (`Distill`) and a session-scoped pass (`SessionDistill`). Backed by `personal.db` (shared with semcom_personal).
 
 **Source:** `../semcom_distill`
 **Module:** `semcom_distill` (replace directive)
@@ -307,9 +314,9 @@ db.Exec(distill.Schema)
 dStore := distill.NewStore(db)
 ```
 
-### Distill
+### Distill (legacy)
 
-Single LLM call per chunk — returns both distillations and named entities.
+Single LLM call per 15-memory chunk — returns distillations and named entities as separate arrays.
 
 ```go
 type LLMClient interface {
@@ -321,6 +328,17 @@ resp, err := distill.Distill(ctx, llm, conversationChunk)
 // resp.Entities      — []Entity{{Text, Type}}
 ```
 
+### SessionDistill
+
+Single LLM call per full session. Returns a unified `snippets` array — each entry carries a topic, a fact-dense snippet, and an optional entity name/type. No separate entity array; general knowledge (no entity) and entity-specific knowledge are both represented.
+
+```go
+resp, err := distill.SessionDistill(ctx, llm, conversationText, userLabel, modelLabel)
+// resp.Snippets — []Snippet
+```
+
+`userLabel` and `modelLabel` are injected into the prompt so the LLM names people explicitly rather than using pronouns. Callers read them from the `SEMCOM_USER_NAME` / `SEMCOM_MODEL_NAME` env vars.
+
 ### Store Methods
 
 ```go
@@ -328,6 +346,7 @@ func (s *Store) InsertDistillation(d *Distillation) (int32, error)
 func (s *Store) GetDistillationsByIDs(ctx context.Context, ids []int32) ([]Distillation, error)
 func (s *Store) GetMetadata(key string) (string, error)   // "" if not set
 func (s *Store) SetMetadata(key, value string) error      // upsert
+func (s *Store) DeleteDistillationsBySessionID(ctx context.Context, sessionID string) error  // cascade removes semkey rows via FK
 ```
 
 ### DistillationRetriever
@@ -339,9 +358,11 @@ dRetriever, err := distill.NewDistillationRetriever(dStore)  // loads all at sta
 
 dRetriever.Add(id int32, semKeys []uint32, personalIDs []uint32)  // call after InsertDistillation
 
-results := dRetriever.Query(l0IDs, personalIDs, personalWeight)  // []DistillationResult sorted desc
+results := dRetriever.Query(l0IDs, personalIDs, personalWeight, excludeIDs)  // excludeIDs may be nil; []DistillationResult sorted desc
 // DistillationResult{ID int32, Score int}
 // Score = L0 hits + (personal hits × personalWeight)
+
+ids := dRetriever.GetByPersonalID(tokenID)  // []int32 sorted desc by ID (most recent first); nil if none
 ```
 
 ### Types
@@ -351,10 +372,24 @@ type Distillation struct {
     ID          int32
     Topic       string
     Snippet     string
-    PersonalIDs []uint32  // personal token IDs matched against topic words
-    SemKeys     []uint32  // L0 cluster IDs for the snippet
+    SessionID   string   // originating session; empty for legacy distillations
+    PersonalIDs []uint32 // personal token IDs matched against topic words
+    SemKeys     []uint32 // L0 cluster IDs for the snippet
 }
 
+// Snippet is the unit of output from SessionDistill.
+type Snippet struct {
+    Topic      string `json:"topic"`
+    Snippet    string `json:"snippet"`
+    Entity     string `json:"entity,omitempty"`
+    EntityType string `json:"entity_type,omitempty"`
+}
+
+type SessionDistillationResponse struct {
+    Snippets []Snippet `json:"snippets"`
+}
+
+// DistilledSnippet and Entity are used by the legacy Distill function only.
 type Entity struct {
     Text string  // e.g. "Alice Chen"
     Type string  // "PERSON", "PLACE", "PROJECT", "ORGANIZATION", "TOPIC"
@@ -374,6 +409,62 @@ Concrete LLM client wrapping providertron/gemini. Satisfies the `LLMClient` inte
 ```go
 client, err := llmclient.New(apiKey, model)
 // client.GenerateJSON satisfies distill.LLMClient
+```
+
+---
+
+## semcom_session
+
+Tracks which memory IDs have been retrieved in each session. Backed by a dedicated `*sql.DB` connection to `memory.db` (not `personal.db` — session data belongs alongside the memories it references).
+
+**Source:** `../semcom_session`
+**Module:** `semcom_session` (replace directive)
+**Import:** `session "semcom_session"`
+
+### Opening
+
+Takes a `*sql.DB` — lifecycle managed by the caller. Schema must be applied before creating the tracker.
+
+```go
+db, _ := sql.Open("sqlite", "memory.db")
+db.Exec(session.Schema)
+tracker := session.NewTracker(db)
+```
+
+### Tracker Methods
+
+```go
+// GetRetrievedIDs returns a bitmap of memory IDs previously retrieved in this session.
+// Returns an empty bitmap (never nil) on error or missing session.
+func (t *Tracker) GetRetrievedIDs(ctx context.Context, sessionID string) *roaring.Bitmap
+
+// MarkRetrieved records that the given memory IDs were retrieved in this session.
+// Uses INSERT OR IGNORE — safe to call with duplicate IDs.
+func (t *Tracker) MarkRetrieved(ctx context.Context, sessionID string, memoryIDs []int32) error
+
+// GetRetrievedDistillationIDs returns a bitmap of distillation IDs already returned in this session.
+// Returns an empty bitmap (never nil) on error or missing session.
+func (t *Tracker) GetRetrievedDistillationIDs(ctx context.Context, sessionID string) *roaring.Bitmap
+
+// MarkDistillationRetrieved records that the given distillation IDs were returned in this session.
+// Uses INSERT OR IGNORE — safe to call with duplicate IDs.
+func (t *Tracker) MarkDistillationRetrieved(ctx context.Context, sessionID string, ids []int32) error
+```
+
+### Schema
+
+```sql
+CREATE TABLE session_retrievals (
+    session_id TEXT    NOT NULL,
+    memory_id  INTEGER NOT NULL,
+    PRIMARY KEY (session_id, memory_id)
+);
+
+CREATE TABLE session_distillation_retrievals (
+    session_id      TEXT    NOT NULL,
+    distillation_id INTEGER NOT NULL,
+    PRIMARY KEY (session_id, distillation_id)
+);
 ```
 
 ---

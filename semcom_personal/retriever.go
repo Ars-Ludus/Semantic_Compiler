@@ -44,6 +44,7 @@ func (r *PersonalRetriever) MemoryTokenCounts(personalIDs []uint32, excludeIDs *
 	defer r.mu.RUnlock()
 
 	counts := make(map[int32]int)
+	useExclusion := excludeIDs != nil && !excludeIDs.IsEmpty()
 	for _, pid := range personalIDs {
 		bm, ok := r.index[pid]
 		if !ok {
@@ -51,7 +52,7 @@ func (r *PersonalRetriever) MemoryTokenCounts(personalIDs []uint32, excludeIDs *
 		}
 
 		var finalBM *roaring.Bitmap
-		if excludeIDs != nil && !excludeIDs.IsEmpty() {
+		if useExclusion {
 			finalBM = roaring.AndNot(bm, excludeIDs)
 		} else {
 			finalBM = bm

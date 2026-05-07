@@ -17,6 +17,7 @@ type Memory struct {
 	TurnID    int32
 	Source    Source
 	Raw       string
+	SessionID string
 	CreatedAt time.Time
 	SemKey    []uint32
 }
@@ -40,6 +41,13 @@ type Store interface {
 	MaxID(ctx context.Context) (int32, error)
 
 	GetIDsBySessionID(ctx context.Context, sessionID string) ([]int32, error)
+
+	// GetDistinctSessionIDs returns all unique non-empty session IDs ordered by
+	// the first memory inserted in each session.
+	GetDistinctSessionIDs(ctx context.Context) ([]string, error)
+
+	// GetMemoriesBySessionID returns all memories for the session ordered by id ASC.
+	GetMemoriesBySessionID(ctx context.Context, sessionID string) ([]*Memory, error)
 
 	GetChunk(ctx context.Context, startID, endID int32) ([]*Memory, error)
 	MemoriesContainingWord(ctx context.Context, word string) ([]*Memory, error)

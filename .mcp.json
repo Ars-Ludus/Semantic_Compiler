@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rebough": {
+      "type": "stdio",
+      "command": "/home/ars/lab/projects/rebough/rebough"
+    }
+  }
+}

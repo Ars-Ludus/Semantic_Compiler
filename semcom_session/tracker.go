@@ -1,4 +1,3 @@
-// Create: semcom_session/tracker.go
 package semcom_session
 
 import (
@@ -50,6 +49,62 @@ func (t *Tracker) GetRetrievedIDs(ctx context.Context, sessionID string) *roarin
 		slog.Error("error iterating session retrievals", "session_id", sessionID, "error", err)
 	}
 	return bm
+}
+
+// GetRetrievedDistillationIDs loads the bitmap of previously returned distillation IDs.
+// Returns an empty bitmap if none exist or if a database error occurs.
+func (t *Tracker) GetRetrievedDistillationIDs(ctx context.Context, sessionID string) *roaring.Bitmap {
+	bm := roaring.New()
+	if sessionID == "" {
+		return bm
+	}
+
+	rows, err := t.db.QueryContext(ctx, `SELECT distillation_id FROM session_distillation_retrievals WHERE session_id = ?`, sessionID)
+	if err != nil {
+		slog.Error("failed to query session distillation retrievals", "session_id", sessionID, "error", err)
+		return bm
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			slog.Error("failed to scan session distillation retrieval row", "session_id", sessionID, "error", err)
+			continue
+		}
+		bm.Add(uint32(id))
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("error iterating session distillation retrievals", "session_id", sessionID, "error", err)
+	}
+	return bm
+}
+
+// MarkDistillationRetrieved records that the given distillation IDs were returned in this session.
+func (t *Tracker) MarkDistillationRetrieved(ctx context.Context, sessionID string, ids []int32) error {
+	if sessionID == "" || len(ids) == 0 {
+		return nil
+	}
+
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO session_distillation_retrievals (session_id, distillation_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range ids {
+		if _, err := stmt.ExecContext(ctx, sessionID, id); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // MarkRetrieved appends newly retrieved memory IDs to the session's record.

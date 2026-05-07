@@ -9,26 +9,24 @@ replace (
 	semcom_distill => ../semcom_distill
 	semcom_embed => ../semcom_embed
 	semcom_internal => ../internal
-	semcom_llm => ../semcom_llm
 	semcom_personal => ../semcom_personal
 	semcom_session => ../semcom_session
 )
 
 require (
+	github.com/Ars-Ludus/providertron v0.0.0-20260423233045-9e50163b5c09
 	github.com/ars/semantic_store v0.0.0-00010101000000-000000000000
 	github.com/ars/semcom_retrieve v0.0.0-00010101000000-000000000000
 	semcom_adapter v0.0.0-00010101000000-000000000000
 	semcom_distill v0.0.0-00010101000000-000000000000
 	semcom_embed v0.0.0-00010101000000-000000000000
 	semcom_internal v0.0.0-00010101000000-000000000000
-	semcom_llm v0.0.0-00010101000000-000000000000
 	semcom_personal v0.0.0-00010101000000-000000000000
 	semcom_session v0.0.0-00010101000000-000000000000
 	modernc.org/sqlite v1.50.0
 )
 
 require (
-	github.com/Ars-Ludus/providertron v0.0.0-20260423233045-9e50163b5c09 // indirect
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

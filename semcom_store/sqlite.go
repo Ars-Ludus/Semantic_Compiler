@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -22,9 +23,19 @@ func openSQLite(path string) (*sqliteStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE memories ADD COLUMN session_id TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate memories.session_id: %w", err)
+		}
 	}
 	return &sqliteStore{db: db}, nil
 }
@@ -37,8 +48,8 @@ func (s *sqliteStore) Insert(ctx context.Context, m *Memory) (int32, error) {
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO memories (turn_id, source, raw_message) VALUES (?, ?, ?)`,
-		m.TurnID, string(m.Source), m.Raw,
+		`INSERT INTO memories (turn_id, source, raw_message, session_id) VALUES (?, ?, ?, ?)`,
+		m.TurnID, string(m.Source), m.Raw, m.SessionID,
 	)
 	if err != nil {
 		return 0, err
@@ -124,6 +135,51 @@ func (s *sqliteStore) GetIDsBySessionID(ctx context.Context, sessionID string) (
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (s *sqliteStore) GetDistinctSessionIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT session_id FROM memories
+		 WHERE session_id IS NOT NULL AND session_id != ''
+		 GROUP BY session_id
+		 ORDER BY MIN(id) ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *sqliteStore) GetMemoriesBySessionID(ctx context.Context, sessionID string) ([]*Memory, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, turn_id, source, raw_message, created_at FROM memories
+		 WHERE session_id = ? ORDER BY id ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memories []*Memory
+	for rows.Next() {
+		m, err := s.scanMemory(rows)
+		if err != nil {
+			return nil, err
+		}
+		memories = append(memories, m)
+	}
+	return memories, rows.Err()
 }
 
 func (s *sqliteStore) GetChunk(ctx context.Context, startID, endID int32) ([]*Memory, error) {
