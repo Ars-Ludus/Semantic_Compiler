@@ -51,9 +51,9 @@ func main() {
 	}
 
 	switch subcommand {
-	case "serve", "distill", "distill-sessions", "ingest-sessions":
+	case "serve", "distill-sessions", "ingest-openclaw":
 	default:
-		log.Fatalf("unknown subcommand %q; use: serve, distill, distill-sessions, ingest-sessions", subcommand)
+		log.Fatalf("unknown subcommand %q; use: serve, distill-sessions, ingest-openclaw", subcommand)
 	}
 
 	idx, err := semindex.Load(indexPath)
@@ -135,18 +135,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	orch.shutdownCtx = ctx
 
 	switch subcommand {
-	case "distill":
-		client, err := newLLMClient()
-		if err != nil {
-			log.Fatalf("%v", err)
-		}
-		if err := RunDistillationPass(ctx, orch, client); err != nil {
-			log.Fatalf("distillation: %v", err)
-		}
-		log.Println("distillation complete.")
-
 	case "distill-sessions":
 		fs := flag.NewFlagSet("distill-sessions", flag.ExitOnError)
 		force := fs.Bool("force", false, "re-distill sessions that were already processed")
@@ -160,14 +151,19 @@ func main() {
 		}
 		log.Println("session distillation complete.")
 
-	case "ingest-sessions":
-		defaultDir := os.ExpandEnv("$HOME/.openclaw/agents/main/sessions")
-		fs := flag.NewFlagSet("ingest-sessions", flag.ExitOnError)
-		sessionsDir := fs.String("sessions-dir", defaultDir, "path to openclaw sessions directory")
+	case "ingest-openclaw":
+		fs := flag.NewFlagSet("ingest-openclaw", flag.ExitOnError)
+		openClawDir := fs.String("dir", filepath.Join(os.Getenv("HOME"), ".openclaw"), "path to .openclaw directory")
+		force := fs.Bool("force", false, "re-ingest sessions already processed")
 		fs.Parse(os.Args[2:])
-		if err := RunIngestSessions(ctx, orch, *sessionsDir); err != nil {
-			log.Fatalf("ingest-sessions: %v", err)
+		client, err := newLLMClient()
+		if err != nil {
+			log.Fatalf("%v", err)
 		}
+		if err := RunOpenClawIngest(ctx, orch, client, userLabel, modelLabel, *openClawDir, *force); err != nil {
+			log.Fatalf("openclaw ingest: %v", err)
+		}
+		log.Println("openclaw ingest complete.")
 
 	case "serve":
 		// Enable auto-distillation if credentials are configured; non-fatal if absent.
@@ -257,6 +253,7 @@ func main() {
 		<-ctx.Done()
 		log.Println("shutting down")
 		srv.Shutdown(context.Background())
+		orch.bgWg.Wait()
 	}
 }
 
@@ -279,16 +276,15 @@ func openSharedDB(path string, schemas ...string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
-	// Idempotent migrations for columns added after initial schema release.
 	for _, stmt := range []string{
 		`ALTER TABLE distillations ADD COLUMN session_id TEXT`,
+		`ALTER TABLE distillations ADD COLUMN entity TEXT`,
+		`ALTER TABLE distillations ADD COLUMN entity_type TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_distillations_session ON distillations(session_id)`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
-			if !strings.Contains(err.Error(), "duplicate column name") {
-				db.Close()
-				return nil, fmt.Errorf("migrate: %w", err)
-			}
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
 	return db, nil

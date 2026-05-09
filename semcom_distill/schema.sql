@@ -3,6 +3,9 @@ CREATE TABLE IF NOT EXISTS distillations (
     topic           TEXT NOT NULL,
     snippet         TEXT NOT NULL,
     personal_tokens TEXT, -- JSON array of related personal token IDs
+    session_id      TEXT,
+    entity          TEXT,
+    entity_type     TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

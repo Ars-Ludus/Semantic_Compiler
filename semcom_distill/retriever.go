@@ -155,6 +155,61 @@ func (r *DistillationRetriever) GetByPersonalID(id uint32) []int32 {
 	return result
 }
 
+// Rebuild atomically replaces both indexes by re-scanning the store from scratch.
+// Call after DeleteDistillationsBySessionID to evict stale entries from deleted rows.
+func (r *DistillationRetriever) Rebuild(s *Store) error {
+	newL0 := make(map[uint32]*roaring.Bitmap)
+	newPersonal := make(map[uint32]*roaring.Bitmap)
+
+	skRows, err := s.db.Query(`SELECT distillation_id, semkey_value FROM distillation_semkeys`)
+	if err != nil {
+		return err
+	}
+	defer skRows.Close()
+	for skRows.Next() {
+		var did int32
+		var sk uint32
+		if err := skRows.Scan(&did, &sk); err != nil {
+			return err
+		}
+		addToBitmap(newL0, sk, uint32(did))
+	}
+	if err := skRows.Err(); err != nil {
+		return err
+	}
+
+	pRows, err := s.db.Query(
+		`SELECT id, personal_tokens FROM distillations
+		 WHERE personal_tokens IS NOT NULL AND personal_tokens != '' AND personal_tokens != 'null'`)
+	if err != nil {
+		return err
+	}
+	defer pRows.Close()
+	for pRows.Next() {
+		var did int32
+		var pJSON string
+		if err := pRows.Scan(&did, &pJSON); err != nil {
+			return err
+		}
+		var pIDs []uint32
+		if err := json.Unmarshal([]byte(pJSON), &pIDs); err != nil {
+			continue
+		}
+		for _, pid := range pIDs {
+			addToBitmap(newPersonal, pid, uint32(did))
+		}
+	}
+	if err := pRows.Err(); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	r.l0Index = newL0
+	r.personalIndex = newPersonal
+	r.mu.Unlock()
+	return nil
+}
+
 func addToBitmap(index map[uint32]*roaring.Bitmap, key, value uint32) {
 	bm, ok := index[key]
 	if !ok {

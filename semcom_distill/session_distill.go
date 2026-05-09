@@ -2,6 +2,7 @@ package distill
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -15,7 +16,7 @@ type Snippet struct {
 	EntityType string `json:"entity_type,omitempty"`
 }
 
-// SessionDistillationResponse is the structured output from SessionDistill.
+// SessionDistillationResponse is the structured output from SessionDistill and ConsolidateSnippets.
 type SessionDistillationResponse struct {
 	Snippets []Snippet `json:"snippets"`
 }
@@ -76,6 +77,45 @@ Conversation:
 	var resp SessionDistillationResponse
 	if err := client.GenerateJSON(ctx, prompt, &resp); err != nil {
 		return nil, fmt.Errorf("llm session distillation failed: %w", err)
+	}
+	return &resp, nil
+}
+
+// ConsolidateSnippets merges an existing set of distillation snippets with a
+// new set produced from the full session. Where snippets overlap on topic,
+// newer information takes precedence. All unique knowledge is preserved.
+// Returns either input unchanged when the other is empty (no LLM call).
+func ConsolidateSnippets(ctx context.Context, client LLMClient, existing, next []Snippet) (*SessionDistillationResponse, error) {
+	if len(existing) == 0 {
+		return &SessionDistillationResponse{Snippets: next}, nil
+	}
+	if len(next) == 0 {
+		return &SessionDistillationResponse{Snippets: existing}, nil
+	}
+
+	existingJSON, _ := json.Marshal(existing)
+	nextJSON, _ := json.Marshal(next)
+
+	prompt := fmt.Sprintf(`You are maintaining a long-term memory index. You have an existing set of knowledge snippets and a new set produced from the same session with additional messages. Merge them into a single canonical set.
+
+Rules:
+- Preserve all unique knowledge from both sets.
+- Where snippets cover the same topic, merge into one: prefer the more specific or up-to-date information; update stale facts with newer ones.
+- Do not duplicate information.
+- Keep entity and entity_type where present; omit if not applicable.
+
+Existing snippets:
+%s
+
+New snippets:
+%s
+
+Return JSON: {"snippets": [{"topic": "...", "snippet": "...", "entity": "...", "entity_type": "..."}]}
+entity and entity_type are optional — omit if not entity-specific.`, existingJSON, nextJSON)
+
+	var resp SessionDistillationResponse
+	if err := client.GenerateJSON(ctx, prompt, &resp); err != nil {
+		return nil, fmt.Errorf("llm consolidation failed: %w", err)
 	}
 	return &resp, nil
 }

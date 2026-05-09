@@ -299,7 +299,7 @@ CREATE INDEX idx_mpt_personal ON memory_personal_tokens (personal_id);
 
 ## semcom_distill
 
-Distillation store, LLM extraction, and distillation reverse index. Supports two extraction modes: a legacy sliding-window pass (`Distill`) and a session-scoped pass (`SessionDistill`). Backed by `personal.db` (shared with semcom_personal).
+Distillation store, LLM extraction, and distillation reverse index. Backed by `personal.db` (shared with semcom_personal).
 
 **Source:** `../semcom_distill`
 **Module:** `semcom_distill` (replace directive)
@@ -314,18 +314,12 @@ db.Exec(distill.Schema)
 dStore := distill.NewStore(db)
 ```
 
-### Distill (legacy)
-
-Single LLM call per 15-memory chunk — returns distillations and named entities as separate arrays.
+### LLMClient
 
 ```go
 type LLMClient interface {
     GenerateJSON(ctx context.Context, prompt string, target interface{}) error
 }
-
-resp, err := distill.Distill(ctx, llm, conversationChunk)
-// resp.Distillations — []DistilledSnippet{{Topic, Snippet}}
-// resp.Entities      — []Entity{{Text, Type}}
 ```
 
 ### SessionDistill
@@ -339,11 +333,23 @@ resp, err := distill.SessionDistill(ctx, llm, conversationText, userLabel, model
 
 `userLabel` and `modelLabel` are injected into the prompt so the LLM names people explicitly rather than using pronouns. Callers read them from the `SEMCOM_USER_NAME` / `SEMCOM_MODEL_NAME` env vars.
 
+### ConsolidateSnippets
+
+Merges an existing snippet set with the new set produced from the full session. Ensures no previously captured knowledge is lost when a session grows. Returns either input unchanged when the other is empty (no LLM call).
+
+```go
+resp, err := distill.ConsolidateSnippets(ctx, llm, existing, next)
+// existing — []Snippet from GetSnippetsBySessionID
+// next     — []Snippet from SessionDistill on the full session
+// resp.Snippets — merged canonical set
+```
+
 ### Store Methods
 
 ```go
 func (s *Store) InsertDistillation(d *Distillation) (int32, error)
 func (s *Store) GetDistillationsByIDs(ctx context.Context, ids []int32) ([]Distillation, error)
+func (s *Store) GetSnippetsBySessionID(ctx context.Context, sessionID string) ([]Snippet, error)  // topic, snippet, entity, entity_type; ordered by ID ASC
 func (s *Store) GetMetadata(key string) (string, error)   // "" if not set
 func (s *Store) SetMetadata(key, value string) error      // upsert
 func (s *Store) DeleteDistillationsBySessionID(ctx context.Context, sessionID string) error  // cascade removes semkey rows via FK
@@ -363,6 +369,8 @@ results := dRetriever.Query(l0IDs, personalIDs, personalWeight, excludeIDs)  // 
 // Score = L0 hits + (personal hits × personalWeight)
 
 ids := dRetriever.GetByPersonalID(tokenID)  // []int32 sorted desc by ID (most recent first); nil if none
+
+err = dRetriever.Rebuild(dStore)  // re-scans DB, atomically replaces both indexes; call after DeleteDistillationsBySessionID
 ```
 
 ### Types
@@ -372,7 +380,9 @@ type Distillation struct {
     ID          int32
     Topic       string
     Snippet     string
-    SessionID   string   // originating session; empty for legacy distillations
+    SessionID   string   // originating session
+    Entity      string   // named entity this snippet is about (empty if general knowledge)
+    EntityType  string   // "PERSON" | "PLACE" | "PROJECT" | "ORGANIZATION" | "TOPIC"
     PersonalIDs []uint32 // personal token IDs matched against topic words
     SemKeys     []uint32 // L0 cluster IDs for the snippet
 }
@@ -387,12 +397,6 @@ type Snippet struct {
 
 type SessionDistillationResponse struct {
     Snippets []Snippet `json:"snippets"`
-}
-
-// DistilledSnippet and Entity are used by the legacy Distill function only.
-type Entity struct {
-    Text string  // e.g. "Alice Chen"
-    Type string  // "PERSON", "PLACE", "PROJECT", "ORGANIZATION", "TOPIC"
 }
 ```
 

@@ -22,7 +22,9 @@ type Distillation struct {
 	ID          int32
 	Topic       string
 	Snippet     string
-	SessionID   string   // originating session; empty for legacy chunk distillations
+	SessionID   string
+	Entity      string
+	EntityType  string
 	PersonalIDs []uint32
 	SemKeys     []uint32
 }
@@ -46,8 +48,8 @@ func (s *Store) InsertDistillation(d *Distillation) (int32, error) {
 	}
 
 	res, err := tx.Exec(
-		`INSERT INTO distillations (topic, snippet, personal_tokens, session_id) VALUES (?, ?, ?, ?)`,
-		d.Topic, d.Snippet, string(pIDsJSON), d.SessionID,
+		`INSERT INTO distillations (topic, snippet, personal_tokens, session_id, entity, entity_type) VALUES (?, ?, ?, ?, ?, ?)`,
+		d.Topic, d.Snippet, string(pIDsJSON), d.SessionID, d.Entity, d.EntityType,
 	)
 	if err != nil {
 		return 0, err
@@ -154,6 +156,28 @@ func (s *Store) AllDistillations(ctx context.Context) ([]*Distillation, error) {
 func (s *Store) DeleteDistillationsBySessionID(ctx context.Context, sessionID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM distillations WHERE session_id = ?`, sessionID)
 	return err
+}
+
+// GetSnippetsBySessionID returns topic+snippet pairs for all distillations
+// belonging to sessionID, ordered by ID ASC. Used as the existing set for
+// ConsolidateSnippets when a session is re-distilled after new memories arrive.
+func (s *Store) GetSnippetsBySessionID(ctx context.Context, sessionID string) ([]Snippet, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT topic, snippet, COALESCE(entity, ''), COALESCE(entity_type, '') FROM distillations WHERE session_id = ? ORDER BY id`,
+		sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var snippets []Snippet
+	for rows.Next() {
+		var sn Snippet
+		if err := rows.Scan(&sn.Topic, &sn.Snippet, &sn.Entity, &sn.EntityType); err != nil {
+			return nil, err
+		}
+		snippets = append(snippets, sn)
+	}
+	return snippets, rows.Err()
 }
 
 // GetMetadata returns the value for key, or "" if not set.

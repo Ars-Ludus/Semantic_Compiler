@@ -13,11 +13,11 @@ The primary bridge between isolated libraries.
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Global vocabulary filtering and vector queries.
 - **Personal Registry**: `semcom_orchestrator` -> `semcom_personal`
-  - File: `semcom_orchestrator/orchestrator.go`, `semcom_orchestrator/distillation.go`
+  - File: `semcom_orchestrator/orchestrator.go`, `semcom_orchestrator/session_distillation.go`, `semcom_orchestrator/ingest_openclaw.go`
   - Usage: Personal token matching (Matcher), memory→token linking (Store.LinkMemory, memory_personal_tokens), and personal reverse index for retrieval (PersonalRetriever).
 - **Distillation**: `semcom_orchestrator` -> `semcom_distill`
-  - File: `semcom_orchestrator/orchestrator.go`, `semcom_orchestrator/distillation.go`
-  - Usage: Raw message processing.
+  - File: `semcom_orchestrator/main.go`, `semcom_orchestrator/session_distillation.go`, `semcom_orchestrator/ingest_openclaw.go`
+  - Usage: Session distillation (SessionDistill, ConsolidateSnippets), distillation store (InsertDistillation, GetSnippetsBySessionID, SetMetadata), and distillation retriever (Query, Rebuild).
 - **Retrieval**: `semcom_orchestrator` -> `semcom_retrieve`
   - File: `semcom_orchestrator/orchestrator.go`
   - Usage: Contextual data fetching.

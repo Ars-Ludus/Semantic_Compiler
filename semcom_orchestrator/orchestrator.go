@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +47,11 @@ type Orchestrator struct {
 	userLabel       string
 	modelLabel      string
 	activeSessionID atomic.Value // stores string; tracks the most recently seen session ID
+
+	// shutdownCtx is the server's lifecycle context. Background goroutines use it
+	// so they stop when the server shuts down.
+	shutdownCtx context.Context
+	bgWg        sync.WaitGroup
 }
 
 // IngestRequest is the input to the Ingest pipeline.
@@ -255,9 +261,18 @@ func (o *Orchestrator) maybeTriggerDistill(sessionID string) {
 	if prev == "" || prev == sessionID {
 		return
 	}
+	ctx := o.shutdownCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	log.Printf("session change detected (%s → %s); scheduling auto-distill of %s", prev, sessionID, prev)
+	o.bgWg.Add(1)
 	go func() {
-		if err := distillOneSession(context.Background(), o, o.llmClient, prev, o.userLabel, o.modelLabel, true); err != nil {
+		defer o.bgWg.Done()
+		if err := distillOneSession(ctx, o, o.llmClient, prev, o.userLabel, o.modelLabel, false); err != nil && ctx.Err() == nil {
 			log.Printf("auto-distill session %s: %v", prev, err)
 		}
 	}()

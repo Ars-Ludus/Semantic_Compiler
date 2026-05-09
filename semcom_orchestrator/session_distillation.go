@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	distill "semcom_distill"
@@ -12,11 +13,8 @@ import (
 )
 
 // RunSessionDistillationPass distils each completed session into a set of
-// knowledge snippets stored in personal.db. Each snippet is embedded and
-// indexed for retrieval; snippets with OOV entities also register personal tokens.
-//
-// Sessions already processed are skipped unless force is true, in which case
-// their existing distillations are deleted and re-generated from scratch.
+// knowledge snippets stored in personal.db. Sessions with no new memories
+// since their last distillation are skipped.
 func RunSessionDistillationPass(ctx context.Context, o *Orchestrator, llm distill.LLMClient, userLabel, modelLabel string, force bool) error {
 	log.Println("starting session distillation pass...")
 
@@ -35,21 +33,17 @@ func RunSessionDistillationPass(ctx context.Context, o *Orchestrator, llm distil
 	return nil
 }
 
-// distillOneSession distils a single session. If force is true, existing
-// distillations for the session are deleted and re-generated.
+// distillOneSession distils a single session. The full session transcript is
+// sent to the LLM on every update. If the session was previously distilled,
+// the new snippets are merged with the existing ones via ConsolidateSnippets
+// so no previously captured knowledge is lost. The retriever is rebuilt after
+// every replace to evict stale entries.
+//
+// If force is true, the session is re-distilled unconditionally.
 func distillOneSession(ctx context.Context, o *Orchestrator, llm distill.LLMClient, sessionID, userLabel, modelLabel string, force bool) error {
 	metaKey := "session_distilled:" + sessionID
 
-	if !force {
-		val, err := o.distillStore.GetMetadata(metaKey)
-		if err != nil {
-			return fmt.Errorf("get metadata for session %s: %w", sessionID, err)
-		}
-		if val != "" {
-			log.Printf("skipping session %s (already distilled)", sessionID)
-			return nil
-		}
-	} else {
+	if force {
 		if err := o.distillStore.DeleteDistillationsBySessionID(ctx, sessionID); err != nil {
 			return fmt.Errorf("clear distillations for session %s: %w", sessionID, err)
 		}
@@ -58,28 +52,65 @@ func distillOneSession(ctx context.Context, o *Orchestrator, llm distill.LLMClie
 		}
 	}
 
-	memories, err := o.store.GetMemoriesBySessionID(ctx, sessionID)
+	// Watermark is the max memory ID included in the last distillation.
+	// Parses to 0 on empty string or any non-numeric legacy value.
+	watermarkStr, err := o.distillStore.GetMetadata(metaKey)
+	if err != nil {
+		return fmt.Errorf("get metadata for session %s: %w", sessionID, err)
+	}
+	watermark64, _ := strconv.ParseInt(watermarkStr, 10, 64)
+	watermark := int32(watermark64)
+
+	allMemories, err := o.store.GetMemoriesBySessionID(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("get memories for session %s: %w", sessionID, err)
 	}
-	if len(memories) == 0 {
+	if len(allMemories) == 0 {
 		return nil
 	}
 
-	var sb strings.Builder
-	for _, m := range memories {
-		fmt.Fprintf(&sb, "[%s]: %s\n", m.Source, m.Raw)
+	maxMemoryID := allMemories[len(allMemories)-1].ID
+	if maxMemoryID <= watermark {
+		log.Printf("session %s: no new memories since watermark %d, skipping", sessionID, watermark)
+		return nil
 	}
 
-	log.Printf("distilling session %s (%d memories)...", sessionID, len(memories))
+	// Send the full session to the LLM.
+	var sb strings.Builder
+	for _, m := range allMemories {
+		fmt.Fprintf(&sb, "[%s]: %s\n", m.Source, m.Raw)
+	}
+	log.Printf("distilling session %s (%d memories)...", sessionID, len(allMemories))
 
-	resp, err := distill.SessionDistill(ctx, llm, sb.String(), userLabel, modelLabel)
+	nextResp, err := distill.SessionDistill(ctx, llm, sb.String(), userLabel, modelLabel)
 	if err != nil {
 		log.Printf("session distillation error for %s: %v", sessionID, err)
 		return nil // non-fatal: log and move on
 	}
 
-	for _, snippet := range resp.Snippets {
+	var finalSnippets []distill.Snippet
+
+	if watermark > 0 {
+		// Merge new snippets with existing so no previously captured knowledge is lost.
+		existing, err := o.distillStore.GetSnippetsBySessionID(ctx, sessionID)
+		if err != nil {
+			return fmt.Errorf("get existing snippets for session %s: %w", sessionID, err)
+		}
+		merged, err := distill.ConsolidateSnippets(ctx, llm, existing, nextResp.Snippets)
+		if err != nil {
+			// Non-fatal: leave existing distillations intact rather than risk losing knowledge.
+			log.Printf("consolidation error for session %s: %v; skipping", sessionID, err)
+			return nil
+		}
+		if err := o.distillStore.DeleteDistillationsBySessionID(ctx, sessionID); err != nil {
+			return fmt.Errorf("delete old distillations for session %s: %w", sessionID, err)
+		}
+		finalSnippets = merged.Snippets
+	} else {
+		finalSnippets = nextResp.Snippets
+	}
+
+	for _, snippet := range finalSnippets {
 		stats := o.embed.Query(snippet.Snippet, o.thresholds)
 		semKeys := make([]uint32, len(stats.L0IDs))
 		for i, id := range stats.L0IDs {
@@ -112,6 +143,8 @@ func distillOneSession(ctx context.Context, o *Orchestrator, llm distill.LLMClie
 			Topic:       snippet.Topic,
 			Snippet:     snippet.Snippet,
 			SessionID:   sessionID,
+			Entity:      snippet.Entity,
+			EntityType:  snippet.EntityType,
 			PersonalIDs: personalIDs,
 			SemKeys:     semKeys,
 		})
@@ -119,12 +152,11 @@ func distillOneSession(ctx context.Context, o *Orchestrator, llm distill.LLMClie
 			log.Printf("insert distillation: %v", err)
 			continue
 		}
-		o.distillRetriever.Add(id, semKeys, personalIDs)
 		log.Printf("stored distillation %d: topic=%q", id, snippet.Topic)
 	}
 
-	// Link session memories to all personal tokens now known to the matcher.
-	for _, m := range memories {
+	// Link all session memories to personal tokens (INSERT OR IGNORE — idempotent).
+	for _, m := range allMemories {
 		words := semindex.SplitWords(m.Raw)
 		personalIDs, _ := o.personal.Match(words)
 		if len(personalIDs) == 0 {
@@ -139,9 +171,14 @@ func distillOneSession(ctx context.Context, o *Orchestrator, llm distill.LLMClie
 		}
 	}
 
-	if err := o.distillStore.SetMetadata(metaKey, "1"); err != nil {
+	// Rebuild the distillation retriever so deleted entries are evicted.
+	if err := o.distillRetriever.Rebuild(o.distillStore); err != nil {
+		log.Printf("rebuild distillation retriever for session %s: %v", sessionID, err)
+	}
+
+	if err := o.distillStore.SetMetadata(metaKey, strconv.FormatInt(int64(maxMemoryID), 10)); err != nil {
 		return fmt.Errorf("set metadata for session %s: %w", sessionID, err)
 	}
-	log.Printf("session %s distillation complete (%d snippets)", sessionID, len(resp.Snippets))
+	log.Printf("session %s distillation complete (%d snippets, watermark=%d)", sessionID, len(finalSnippets), maxMemoryID)
 	return nil
 }
